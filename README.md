@@ -6,7 +6,7 @@
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 [![Language: Japanese](https://img.shields.io/badge/Language-Japanese-green.svg)]()
 
-> ✅ 2026-09-10 仓库创建：Fun-ASR-Nano-2512 引擎镜像 + 门面服务（鉴权/限流/OpenAI 兼容/流式 WS）代码就绪，待服务器首验（见 [docs/deployment.md](docs/deployment.md)）。
+> ✅ 2026-09-10 服务器首验：Fun-ASR-Nano 批量/流式全链路在 Tesla T4 上实测跑通（fp32 + 显存调参，见 [docs/deployment.md](docs/deployment.md)）；因本机显存余量不足，生产部署暂缓，待显存充足的机器。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 
@@ -24,8 +24,8 @@
                       CHII_ASR_BACKEND=funasr|qwen3 选择 backend_*.py
 
 引擎 (Docker 容器, 单容器双进程):
-  funasr-server          OpenAI 兼容 HTTP 批量转写
-  serve_realtime_ws.py   Fun-ASR-Nano 官方流式 WebSocket 服务
+  funasr-server           OpenAI 兼容 HTTP 批量转写 (:9001, AutoModel)
+  funasr-realtime-server  流式 WebSocket 服务 (:10095, vLLM)
 ```
 
 与家族其他服务（[LLM](https://github.com/chenxin199305/Chobits-Chii-LLM) / [TTS](https://github.com/chenxin199305/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与协议垫片，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。
@@ -58,7 +58,7 @@ Chobits-Chii-ASR/
 ├── .gitignore
 ├── requirements.txt        # 门面依赖 (家族唯一: 门面需要 WebSocket 能力, 标准库不够)
 ├── docker/                 # 推理引擎镜像
-│   ├── Dockerfile             # Fun-ASR-Nano-2512 引擎 (funasr + 官方流式脚本)
+│   ├── Dockerfile             # Fun-ASR-Nano-2512 引擎 (funasr vLLM 服务栈 + T4 适配)
 │   └── entrypoint.sh          # 单容器双进程: HTTP :9001 + WS :10095
 ├── tools/                  # 工具脚本
 │   ├── server.py              # ASR 门面 (API Key 鉴权 + 限流 + OpenAI 垫片 + 流式 WS 网关)
@@ -80,6 +80,8 @@ Chobits-Chii-ASR/
 
 ```bash
 # 1. 构建并启动引擎容器 (模型权重首启自动经 ModelScope 下载)
+#    国内机构建慢/超时见 docs/deployment.md 的镜像源 build-args;
+#    引擎显存需求: 批量 AutoModel ~2.4GB + 流式 vLLM (默认预算 WS_GPU_MEM_UTIL=0.55×总显存)
 docker build -t chobits-chii-asr-engine docker/
 docker run -d --name chobits-chii-asr-engine --gpus all --restart unless-stopped \
   -p 127.0.0.1:9001:9001 -p 127.0.0.1:10095:10095 \
@@ -104,7 +106,7 @@ python3 tools/client_example.py stream sample.wav ja
 ```
 
 其他环境变量：`CHII_ASR_RATE_LIMIT`（转写与流式每 IP 每分钟限流次数，默认 60，0 关闭）；
-`CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_WS_URL`（切换后端用）；
+`CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_WS_URL` / `CHII_ASR_ENGINE_MODEL`（切换后端用）；
 `CHII_ASR_SSL_CERTFILE` / `CHII_ASR_SSL_KEYFILE`（同时设置时以 HTTPS/WSS 启动）。
 
 注意在云安全组放行 TCP 9881；引擎端口 9001/10095 不要对外开放。
@@ -124,7 +126,8 @@ python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag 
 
 ## Roadmap
 
-- [ ] 服务器首验：镜像构建、Fun-ASR-Nano 批量/流式全链路（docs/deployment.md 补实测环境）
+- [x] 服务器首验：镜像构建、Fun-ASR-Nano 批量/流式全链路（Tesla T4 实测，含 fp32/显存调参记录，见 docs/deployment.md）
+- [ ] 生产部署：显存充足（批量+流式约需 9GB 空闲显存）的机器上跑 systemd+TLS 全量配置
 - [ ] Chobits-Chii-Voice 数据集上的日语 CER 基线（Fun-ASR-Nano vs Qwen3-ASR 对比）
 - [ ] Qwen3-ASR 流式 WS shim（引擎容器内基于 qwen-asr streaming SDK，复用 Nano 协议）
 - [ ] 日语识别热词支持（Fun-ASR-Nano 原生 hotwords，如角色名「秀樹」「ちぃ」）

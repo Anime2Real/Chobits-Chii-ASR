@@ -1,42 +1,79 @@
 # Chobits-Chii-ASR 部署实录
 
-> 本文按家族惯例记录服务器部署全过程。首次部署时请按步骤实测并把环境信息补全到
-> 「实测环境」一节（参考 Chobits-Chii-LLM/docs/deployment.md 的风格）。
+> 本文按家族惯例记录服务器部署全过程。
 
 ## 实测环境
 
-- 服务器：Ubuntu 24.04 + GPU（8GB 显存及以上即可，Fun-ASR-Nano 仅 0.8B）
-- Docker + NVIDIA Container Toolkit
-- 日期：待首次部署时填写
+- 服务器：腾讯云 CVM，Ubuntu 20.04 LTS，Tesla T4 16GB（驱动 525.105.17 / CUDA 12.0）
+- Docker + NVIDIA Container Toolkit（nvidia-ctk 已装）
+- 首验日期：2026-09-10
+
+## 首验结论（2026-09-10，Tesla T4）
+
+批量转写与流式识别**全链路均已实测跑通**（引擎直连 + 经门面 9881，含鉴权/改写/关闭帧）：
+
+- 批量：`POST /v1/audio/transcriptions` → `{"text":"伊吹は地位を拾ってくれた。"}`（4.2s 日语样本）
+- 流式：`start` → PCM16 帧 → `stop`，partial 逐步修正 → final「秀樹は地位を拾ってくれた。」
+- 门面：Bearer 鉴权（未授权 401）、`model=chii-asr` → 引擎注册名改写、流式连接干净关闭
+
+**但本机不部署生产**：T4 16GB 上引擎同跑需约 13GB（批量 AutoModel ~2.5GB + 流式 vLLM ~10GB），
+与既有 LLM/TTS 服务共卡时批量推理工作显存不足（实测 OOM）。待显存充足
+（批量+流式约需 12GB 空闲显存；bf16 卡可降至 ~8GB）的机器再上线。
+
+## T4（及无 bf16 的老卡）适配要点
+
+首验中踩过的坑，均已固化进 `docker/` 与 `tools/` 代码：
+
+1. **funasr 1.4.x 服务栈基于 vLLM**：流式 `funasr-realtime-server` 硬依赖（无回退）；
+   批量 `funasr-server` 失败回退 AutoModel。镜像需显式装 `vllm fastapi uvicorn python-multipart`
+   （后三个 funasr 未声明为依赖）。
+2. **dtype 只能 fp32**：T4（sm75）无 bf16 单元，vLLM 直接拒绝；funasr 又把 fp16 静默映射成
+   bf16（`inference_vllm._resolve_vllm_dtype`），官方注释明确无 bf16 的卡用 fp32。权重显存因此翻倍。
+3. **triton 需要 C 编译器**：vLLM 在 Turing 上 JIT 编译 ieee 精度 kernel，runtime 镜像无 gcc 必崩
+   （`Failed to find C compiler`），镜像已装 gcc。
+4. **批量侧 vLLM 尝试必须禁用**：`funasr._server_app` 硬编码 bf16 + 0.5 显存配比，T4 上必失败
+   且每次失败残留数 GB 孤儿显存。镜像内补丁加 `FUNASR_SERVER_NO_VLLM` 开关，entrypoint 默认置 1
+   （走 AutoModel 回退）；bf16 卡可 `-e FUNASR_SERVER_NO_VLLM=` 恢复。
+5. **显存配比**：vLLM 的 `gpu_memory_utilization` 预算**含其他进程占用**。0.25/0.35 实测 KV cache
+   不足（fp32 下 2048 长度需 ~0.88GiB），`WS_GPU_MEM_UTIL=0.55` 通过。
+6. **funasr-server 参数**：`--model` 只接受别名（fun-asr-nano 等），模型 ID 要走 `--model-path`；
+   此时引擎注册名为 `custom`，门面透传批量转写时把 `model` 改写为 `CHII_ASR_ENGINE_MODEL`（默认 custom）。
+7. **WS 引擎协议是纯文本命令**（非 JSON）：`START` / `STOP` / `LANGUAGE:<提示语>` / `HOTWORDS:a,b`；
+   音频必须 16kHz PCM16；STOP 后引擎不关连接，回 `{"event":"stopped"}` 与 `is_final` 结果帧，
+   由 `tools/backend_funasr.py` 适配并主动断流。语言提示语用「日本語」而非「日语」。
+8. **构建网络**（国内机器）：PyPI/GitHub 直连慢或超时。构建用
+   `--build-arg PIP_INDEX_URL/PIP_TRUSTED_HOST`（PyPI 镜像）与 `--build-arg APT_MIRROR`（apt 镜像）；
+   流式服务直接用 pip 包自带的 `funasr-realtime-server`，不再从 GitHub 拉脚本。
 
 ## 1. 构建引擎镜像
 
 ```bash
-# 生产环境建议把 FUNASR_REPO_REF 锁到验证过的 commit (默认 main, 防上游漂移)
+# 海外机器直接 docker build -t chobits-chii-asr-engine docker/ 即可;
+# 国内机器（本次实测）走内网镜像源:
 docker build -t chobits-chii-asr-engine \
-  --build-arg FUNASR_REPO_REF=main \
+  --build-arg PIP_INDEX_URL=http://mirrors.tencentyun.com/pypi/simple \
+  --build-arg PIP_TRUSTED_HOST=mirrors.tencentyun.com \
+  --build-arg APT_MIRROR=mirrors.tencentyun.com \
   docker/
 ```
 
 ## 2. 启动引擎容器
 
 ```bash
-# 模型权重首次启动经 ModelScope 下载 (~2GB), 挂载缓存卷避免重复下载
+# 模型权重首次启动经 ModelScope 下载 (~2.2GB), 挂载缓存卷避免重复下载
 docker run -d --name chobits-chii-asr-engine \
   --gpus all --restart unless-stopped \
   -p 127.0.0.1:9001:9001 -p 127.0.0.1:10095:10095 \
   -v $HOME/.cache/modelscope:/root/.cache/modelscope \
-  -e LANGUAGE=日语 \
   chobits-chii-asr-engine
 
-docker logs -f chobits-chii-asr-engine   # 等两个服务都打印就绪
+docker logs -f chobits-chii-asr-engine   # 等 "Uvicorn running on :9001" 与 "Server on ws://0.0.0.0:10095"
 ```
 
 - 引擎只绑到 `127.0.0.1`，对外暴露统一由门面负责（鉴权/TLS 都在门面层）。
 - 端口约定：容器内 `9001` = HTTP 批量转写，`10095` = WebSocket 流式。
-- 首次启动留意日志确认模型加载完成（出现 server listening 字样）；
-  若 `funasr-server` 参数与当前版本不符，以 `docker exec ... funasr-server --help` 为准
-  并同步修正 `docker/entrypoint.sh`。
+- 镜像内默认值（均可 `-e` 覆盖）：`LANGUAGE=日本語`、`DTYPE=fp32`、`WS_GPU_MEM_UTIL=0.55`、
+  `FUNASR_SERVER_NO_VLLM=1`。bf16 卡（A100/4090 等）建议 `-e DTYPE=bf16 -e FUNASR_SERVER_NO_VLLM=`。
 
 ## 3. 启动门面（宿主机）
 
@@ -44,6 +81,10 @@ docker logs -f chobits-chii-asr-engine   # 等两个服务都打印就绪
 export CHII_ASR_API_KEY=<随机密钥>   # 必填, 未设置拒绝启动
 bash tools/start_asr_api.sh 9881     # 首次运行自动建 .venv 装依赖
 ```
+
+注意：宿主机 `python3` 若为 ≤3.9（本机为 Ubuntu 20.04 自带 3.8），自动建的 .venv 无法运行
+`server.py`（用到 3.10+ 注解语法），需用 ≥3.10 的解释器手动建 .venv：
+`<新python> -m venv .venv && .venv/bin/pip install -r requirements.txt`。
 
 ## 4. systemd 守护（生产）
 
@@ -73,6 +114,7 @@ WantedBy=multi-user.target
 #   CHII_ASR_BACKEND=funasr                     (默认, 切 Qwen3-ASR 时改 qwen3)
 #   CHII_ASR_ENGINE_HTTP_URL=http://127.0.0.1:9001
 #   CHII_ASR_ENGINE_WS_URL=ws://127.0.0.1:10095
+#   CHII_ASR_ENGINE_MODEL=custom                (默认, funasr --model-path 模式的注册名)
 #   CHII_ASR_SSL_CERTFILE=/etc/chobits-chii-asr.crt   (可选, 见下方 TLS)
 #   CHII_ASR_SSL_KEYFILE=/etc/chobits-chii-asr.key    (可选, 与上一条同时设置)
 sudo systemctl daemon-reload && sudo systemctl enable --now chobits-chii-asr

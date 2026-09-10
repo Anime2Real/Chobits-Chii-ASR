@@ -18,6 +18,7 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_BACKEND          引擎后端: funasr (默认) | qwen3
     CHII_ASR_ENGINE_HTTP_URL  引擎 HTTP 地址, 默认 http://127.0.0.1:9001
     CHII_ASR_ENGINE_WS_URL    引擎 WS 地址, 默认 ws://127.0.0.1:10095
+    CHII_ASR_ENGINE_MODEL     引擎注册的模型名 (funasr --model-path 模式为 custom), 默认 custom
     CHII_ASR_RATE_LIMIT       每 IP 每分钟限流次数 (转写与流式), 默认 60, 设 0 关闭
     CHII_ASR_SSL_CERTFILE / CHII_ASR_SSL_KEYFILE  同时设置则以 HTTPS/WSS 启动
 
@@ -47,6 +48,9 @@ RATE_LIMIT = int(_getenv("RATE_LIMIT", "60"))
 BACKEND = _getenv("BACKEND", "funasr")
 ENGINE_HTTP_URL = _getenv("ENGINE_HTTP_URL", "http://127.0.0.1:9001").rstrip("/")
 ENGINE_WS_URL = _getenv("ENGINE_WS_URL", "ws://127.0.0.1:10095")
+# 引擎侧注册的模型名: funasr-server 按加载方式注册 (--model-path → "custom", --model → 别名),
+# 不认门面对外名 chii-asr, 透传批量转写时改写 model 字段为该值
+ENGINE_MODEL = _getenv("ENGINE_MODEL", "custom")
 
 # TLS: 两个变量都设置时以 HTTPS/WSS 启动 (自签名证书见 docs/deployment.md)
 SSL_CERTFILE = _getenv("SSL_CERTFILE")
@@ -65,6 +69,7 @@ import httpx  # noqa: E402
 import uvicorn  # noqa: E402
 from fastapi import FastAPI, Request, WebSocket  # noqa: E402
 from fastapi.responses import JSONResponse, Response  # noqa: E402
+from starlette.datastructures import UploadFile  # noqa: E402
 
 ASR_MODEL = "chii-asr"
 HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "content-length",
@@ -111,16 +116,27 @@ async def models(request: Request):
 
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(request: Request):
-    """OpenAI 批量转写垫片: multipart 请求原样透传引擎, 响应原样回传。"""
+    """OpenAI 批量转写垫片: 透传 multipart 表单, 仅把 model 字段改写为引擎注册名。
+
+    引擎只认自己注册的模型名 (见 ENGINE_MODEL), 对外统一暴露 chii-asr;
+    文件与其余表单字段 (language/prompt 等) 原样转发, 响应原样回传。"""
     if not _authorized(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     if not _rate_ok(request.client.host if request.client else "unknown"):
         return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
-    body = await request.body()
+    data: dict = {}
+    files: dict = {}
+    for key, value in (await request.form()).multi_items():
+        if key == "model":
+            data[key] = ENGINE_MODEL
+        elif isinstance(value, UploadFile):
+            files[key] = (value.filename, await value.read(), value.content_type)
+        else:
+            data[key] = value
+    if "model" not in data:
+        data["model"] = ENGINE_MODEL
     try:
-        resp = await _engine.post(
-            "/v1/audio/transcriptions", content=body,
-            headers={"Content-Type": request.headers.get("Content-Type", "")})
+        resp = await _engine.post("/v1/audio/transcriptions", data=data, files=files)
     except httpx.HTTPError as e:
         return JSONResponse({"error": f"upstream error: {type(e).__name__}"},
                             status_code=502)

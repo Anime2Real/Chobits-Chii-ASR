@@ -1,0 +1,17 @@
+# 模型权重与缓存 (体积大, 首次启动由容器经 ModelScope/HuggingFace 下载)
+models/
+*.pt
+*.pth
+*.ckpt
+*.safetensors
+*.bin
+
+# 评测/示例音频与产物 (可由上游数据集重新生成)
+data/wavs/
+examples/assets/
+outputs/
+logs/
+
+__pycache__/
+.venv/
+.DS_Store

@@ -41,7 +41,12 @@ def _to_engine_commands(start: dict) -> list:
 
 
 async def _forward_engine_message(client, raw, sentences: list) -> bool:
-    """Nano 引擎消息 → 统一 partial/final 帧。返回 True 表示本次会话应结束。"""
+    """Nano 引擎消息 → 统一 partial/final 帧。返回 True 表示本次会话应结束。
+
+    引擎每条消息都带全量 sentences 历史, sentences 参数按下标记录已下推进度
+    (与引擎数组严格对齐, 含空文本占位), 只发新增的尾巴——按文本去重会同时造成
+    "不同句级联重复"和"连续相同句被吞"两类错误。引擎偶尔会原地扩写最后一句
+    (boundary retry), 已下推的下标不重发, 该扩写会被跳过 (可接受的极端边角)。"""
     try:
         data = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
@@ -58,10 +63,12 @@ async def _forward_engine_message(client, raw, sentences: list) -> bool:
     partial = data.get("partial")
     if partial:
         await client.send_json({"type": "partial", "text": partial})
-    for sent in data.get("sentences") or []:
+    for i, sent in enumerate(data.get("sentences") or []):
+        if i < len(sentences):
+            continue
         text = sent.get("text") if isinstance(sent, dict) else str(sent)
-        if text and (not sentences or sentences[-1] != text):  # 引擎会重复推全量, 去重
-            sentences.append(text)
+        sentences.append(text or "")
+        if text:
             await client.send_json({"type": "final", "text": text})
     return bool(data.get("is_final"))
 

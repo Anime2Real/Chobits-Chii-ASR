@@ -29,6 +29,8 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
 面向公众分发应用时, 建议由后端服务代为调用, 不要把唯一密钥嵌进客户端。
 """
 
+import hashlib
+import hmac
 import os
 import sys
 import time
@@ -43,6 +45,28 @@ def _getenv(suffix: str, default: str = "") -> str:
 API_KEY = _getenv("API_KEY")
 if not API_KEY:
     sys.exit("[错误] 未设置 CHII_ASR_API_KEY 环境变量, 拒绝以无鉴权方式启动")
+
+# 与签发服务 (newapi_provision.py) 共享的 WS 票据签名密钥：
+# app 先经垫片 /v1/asr/ticket 换短时票据，再用票据直连 /v1/realtime，
+# 门面本地验签即可，无需回调 New API
+TICKET_SECRET = _getenv("TICKET_SECRET")
+BIND = _getenv("BIND", "0.0.0.0")  # 生产走 Caddy 反代时绑 127.0.0.1
+
+
+def _ticket_ok(ticket: str) -> bool:
+    """校验短时票据 "<expiry_unix_ts>.<hmac16>"(HMAC-SHA256 签名, 60 秒有效)。"""
+    if not TICKET_SECRET or "." not in ticket:
+        return False
+    exp_str, sig = ticket.rsplit(".", 1)
+    try:
+        exp = int(exp_str)
+    except ValueError:
+        return False
+    if exp < int(time.time()):
+        return False
+    expected = hmac.new(TICKET_SECRET.encode(),
+                        f"asr-realtime.{exp}".encode(), hashlib.sha256).hexdigest()[:32]
+    return hmac.compare_digest(sig, expected)
 
 RATE_LIMIT = int(_getenv("RATE_LIMIT", "60"))
 BACKEND = _getenv("BACKEND", "funasr")
@@ -148,7 +172,8 @@ async def transcriptions(request: Request):
 async def realtime(ws: WebSocket):
     """统一流式识别入口: 鉴权/限流后交给当前后端的适配层。"""
     if ws.query_params.get("api_key") != API_KEY and \
-            ws.headers.get("Authorization", "") != f"Bearer {API_KEY}":
+            ws.headers.get("Authorization", "") != f"Bearer {API_KEY}" and \
+            not _ticket_ok(ws.query_params.get("ticket", "")):
         await ws.close(code=4401)
         return
     if not _rate_ok(ws.client.host if ws.client else "unknown"):
@@ -168,10 +193,10 @@ async def realtime(ws: WebSocket):
 def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else int(_getenv("PORT", "9881"))
     scheme = "https" if SSL_CERTFILE else "http"
-    print(f"[asr] {scheme}://0.0.0.0:{port}  backend={BACKEND}"
+    print(f"[asr] {scheme}://{BIND}:{port}  backend={BACKEND}"
           f"  /v1/models /v1/audio/transcriptions /v1/realtime"
           f" → {ENGINE_HTTP_URL} / {ENGINE_WS_URL}", file=sys.stderr)
-    uvicorn.run(app, host="0.0.0.0", port=port,
+    uvicorn.run(app, host=BIND, port=port,
                 ssl_certfile=SSL_CERTFILE or None, ssl_keyfile=SSL_KEYFILE or None)
 
 

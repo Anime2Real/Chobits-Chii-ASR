@@ -8,17 +8,22 @@
 - Docker + NVIDIA Container Toolkit（nvidia-ctk 已装）
 - 首验日期：2026-09-10
 
-## 首验结论（2026-09-10，Tesla T4）
+## 首验结论（2026-09-10 首验，2026-09-12 生产上线，Tesla T4）
 
 批量转写与流式识别**全链路均已实测跑通**（引擎直连 + 经门面 9881，含鉴权/改写/关闭帧）：
 
-- 批量：`POST /v1/audio/transcriptions` → `{"text":"伊吹は地位を拾ってくれた。"}`（4.2s 日语样本）
+- 批量：`POST /v1/audio/transcriptions` → `{"text":"伊吹は地位を拾ってくれた。"}`（4.2s 日语样本，CPU 约 2.5s）
 - 流式：`start` → PCM16 帧 → `stop`，partial 逐步修正 → final「秀樹は地位を拾ってくれた。」
 - 门面：Bearer 鉴权（未授权 401）、`model=chii-asr` → 引擎注册名改写、流式连接干净关闭
 
-**但本机不部署生产**：T4 16GB 上引擎同跑需约 13GB（批量 AutoModel ~2.5GB + 流式 vLLM ~10GB），
-与既有 LLM/TTS 服务共卡时批量推理工作显存不足（实测 OOM）。待显存充足
-（批量+流式约需 12GB 空闲显存；bf16 卡可降至 ~8GB）的机器再上线。
+**2026-09-12 已在本机生产上线**（LLM 迁出后显存空出）：引擎容器 `--restart unless-stopped` +
+门面 systemd（`chobits-chii-asr.service`，enabled）。本机拓扑（T4 16GB + TTS 常驻 3.7GB）：
+
+- **批量转写跑 CPU**（`-e HTTP_DEVICE=cpu`）：实测 4.2s 音频约 2.5s，比实时还快，不占显存；
+- **流式识别独占 GPU**（`-e WS_GPU_MEM_UTIL=0.40`，vLLM fp32 ~6GB + 音频组件 ~4GB）；
+- 静态占用 ~13.3GB，留 ~3GB 推理工作余量。
+
+若换显存更大的卡（或独占卡）：去掉 `HTTP_DEVICE=cpu` 让批量回 GPU，`WS_GPU_MEM_UTIL` 用镜像默认 0.55 即可。
 
 ## T4（及无 bf16 的老卡）适配要点
 
@@ -44,6 +49,14 @@
 8. **构建网络**（国内机器）：PyPI/GitHub 直连慢或超时。构建用
    `--build-arg PIP_INDEX_URL/PIP_TRUSTED_HOST`（PyPI 镜像）与 `--build-arg APT_MIRROR`（apt 镜像）；
    流式服务直接用 pip 包自带的 `funasr-realtime-server`，不再从 GitHub 拉脚本。
+9. **启动顺序竞争**：vLLM 按**启动那一刻的空闲显存**配比预算（`util × 总容量 ≤ 当前空闲`，
+   否则拒绝启动）。两服务并发启动会互相看不见对方而超发，把后加载方挤到 OOM——entrypoint
+   已改为批量先就绪（HTTP 200 探测）再起流式。
+10. **小卡共存拓扑**：T4 16GB + TTS 3.7GB 常驻时，批量 AutoModel(GPU ~2.4GB) + 流式 vLLM(fp32)
+    静态即占满，推理工作显存为 0（实测批量/流式双双 OOM）。解法：`HTTP_DEVICE=cpu` 批量上 CPU
+    （8 核实测 4.2s 音频约 2.5s），流式独占 GPU（util 0.40），留 ~3GB 工作余量。
+11. **TLS 私钥属主**：门面以 `User=ubuntu` 运行，`/etc/chobits-chii-asr.key` 必须
+    `chown ubuntu:ubuntu`（openssl 以 sudo 生成默认 root:root 600，uvicorn 读不了直接起不来）。
 
 ## 1. 构建引擎镜像
 
@@ -66,6 +79,9 @@ docker run -d --name chobits-chii-asr-engine \
   -p 127.0.0.1:9001:9001 -p 127.0.0.1:10095:10095 \
   -v $HOME/.cache/modelscope:/root/.cache/modelscope \
   chobits-chii-asr-engine
+
+# 本机 (T4 16GB + TTS 共卡) 生产实际使用:
+#   增加 -e HTTP_DEVICE=cpu -e WS_GPU_MEM_UTIL=0.40   (理由见适配要点 9/10)
 
 docker logs -f chobits-chii-asr-engine   # 等 "Uvicorn running on :9001" 与 "Server on ws://0.0.0.0:10095"
 ```
@@ -128,6 +144,7 @@ sudo openssl req -x509 -newkey rsa:2048 -nodes \
   -keyout /etc/chobits-chii-asr.key -out /etc/chobits-chii-asr.crt -days 3650 \
   -subj "/CN=chii-asr" -addext "subjectAltName=IP:<服务器IP>,IP:127.0.0.1"
 sudo chmod 600 /etc/chobits-chii-asr.key
+sudo chown ubuntu:ubuntu /etc/chobits-chii-asr.key /etc/chobits-chii-asr.crt   # 门面以 User=ubuntu 运行, 否则读 key 失败
 # 在 /etc/chobits-chii-asr.env 中设置 CHII_ASR_SSL_CERTFILE / CHII_ASR_SSL_KEYFILE 后重启服务
 ```
 

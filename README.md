@@ -6,7 +6,7 @@
 [![License: CC BY-NC-SA 4.0](https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg)](https://creativecommons.org/licenses/by-nc-sa/4.0/)
 [![Language: Japanese](https://img.shields.io/badge/Language-Japanese-green.svg)]()
 
-> ✅ 2026-09-10 服务器首验：Fun-ASR-Nano 批量/流式全链路在 Tesla T4 上实测跑通（fp32 + 显存调参，见 [docs/deployment.md](docs/deployment.md)）；因本机显存余量不足，生产部署暂缓，待显存充足的机器。
+> ✅ 2026-09-12 生产上线：Fun-ASR-Nano 批量/流式全链路在 Tesla T4 服务器运行中（批量走 CPU、流式独占 GPU 的共存拓扑，见 [docs/deployment.md](docs/deployment.md)）。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 
@@ -127,7 +127,7 @@ python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag 
 ## Roadmap
 
 - [x] 服务器首验：镜像构建、Fun-ASR-Nano 批量/流式全链路（Tesla T4 实测，含 fp32/显存调参记录，见 docs/deployment.md）
-- [ ] 生产部署：显存充足（批量+流式约需 9GB 空闲显存）的机器上跑 systemd+TLS 全量配置
+- [x] 生产部署：引擎容器 + systemd 门面 + TLS 上线（2026-09-12，批量 CPU / 流式 GPU 共存拓扑）
 - [ ] Chobits-Chii-Voice 数据集上的日语 CER 基线（Fun-ASR-Nano vs Qwen3-ASR 对比）
 - [ ] Qwen3-ASR 流式 WS shim（引擎容器内基于 qwen-asr streaming SDK，复用 Nano 协议）
 - [ ] 日语识别热词支持（Fun-ASR-Nano 原生 hotwords，如角色名「秀樹」「ちぃ」）

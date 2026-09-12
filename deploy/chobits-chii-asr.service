@@ -9,7 +9,7 @@ User=ubuntu
 Group=ubuntu
 WorkingDirectory=/home/ubuntu/Github/Chobits-Chii-ASR
 EnvironmentFile=/etc/chobits-chii-asr.env
-ExecStart=/home/ubuntu/Github/Chobits-Chii-ASR/.venv/bin/python tools/server.py 9881
+ExecStart=/bin/bash /home/ubuntu/Github/Chobits-Chii-ASR/tools/start_asr_api.sh 9881
 Restart=always
 RestartSec=3
 

@@ -1,0 +1,17 @@
+[Unit]
+Description=Chobits-Chii ASR 门面 (API Key 鉴权 + 限流 + OpenAI 垫片 + 流式 WS 网关)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=ubuntu
+Group=ubuntu
+WorkingDirectory=/home/ubuntu/Github/Chobits-Chii-ASR
+EnvironmentFile=/etc/chobits-chii-asr.env
+ExecStart=/home/ubuntu/Github/Chobits-Chii-ASR/.venv/bin/python tools/server.py 9881
+Restart=always
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

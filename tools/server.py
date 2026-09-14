@@ -39,6 +39,7 @@ import asyncio
 import hashlib
 import hmac
 import os
+import re
 import sys
 import time
 from collections import defaultdict, deque
@@ -57,7 +58,7 @@ if not API_KEY:
 # app 先经垫片 /v1/asr/ticket 换短时票据，再用票据直连 /v1/realtime，
 # 门面本地验签即可，无需回调 New API
 TICKET_SECRET = _getenv("TICKET_SECRET")
-BIND = _getenv("BIND", "0.0.0.0")  # 生产走 Caddy 反代时绑 127.0.0.1
+BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网见下方 TLS 守卫
 
 
 def _ticket_consume(ticket: str) -> bool:
@@ -107,6 +108,12 @@ SSL_CERTFILE = _getenv("SSL_CERTFILE")
 SSL_KEYFILE = _getenv("SSL_KEYFILE")
 if bool(SSL_CERTFILE) != bool(SSL_KEYFILE):
     sys.exit("[错误] CHII_ASR_SSL_CERTFILE 与 CHII_ASR_SSL_KEYFILE 必须同时设置")
+# 明文 HTTP 绑非回环地址 = Bearer key 明文过网：拒绝启动（生产应由 Caddy 终结 TLS，
+# 门面绑回环；确需内网明文直连时请自行评估后再改 BIND）
+_LOOPBACK = {"127.0.0.1", "localhost", "::1"}
+if BIND not in _LOOPBACK and not SSL_CERTFILE:
+    sys.exit(f"[错误] BIND={BIND} 为非回环地址但未配置 TLS（CHII_ASR_SSL_CERTFILE/KEYFILE），"
+             "明文 HTTP 会泄露 API Key，拒绝启动")
 
 if BACKEND == "funasr":
     import backend_funasr as backend
@@ -122,8 +129,6 @@ from fastapi.responses import JSONResponse, Response  # noqa: E402
 from starlette.datastructures import UploadFile  # noqa: E402
 
 ASR_MODEL = "chii-asr"
-HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "content-length",
-              "content-encoding", "te", "trailers", "upgrade"}
 
 app = FastAPI(title="chobits-chii-asr", docs_url=None, redoc_url=None)
 _engine = httpx.AsyncClient(base_url=ENGINE_HTTP_URL, timeout=httpx.Timeout(300.0))
@@ -144,10 +149,21 @@ def _client_ip(host: str, headers) -> str:
     return host
 
 
+def _key_ok(provided: str) -> bool:
+    """常量时间比较 API key（远程时序攻击难利用，但修复零成本）。"""
+    if not provided:
+        return False
+    return hmac.compare_digest(
+        hashlib.sha256(provided.encode()).digest(),
+        hashlib.sha256(API_KEY.encode()).digest())
+
+
 def _authorized(request: Request) -> bool:
-    if request.headers.get("Authorization", "") == f"Bearer {API_KEY}":
-        return True
-    return request.query_params.get("api_key") == API_KEY
+    # 只认 Authorization 头；不再接受 ?api_key=（query string 会进访问日志）
+    auth = request.headers.get("Authorization", "")
+    if not auth.lower().startswith("bearer "):
+        return False
+    return _key_ok(auth[7:].strip())
 
 
 def _rate_ok(ip: str) -> bool:
@@ -181,17 +197,32 @@ async def models(request: Request):
     ]}
 
 
+# 转写透传的表单字段白名单（其余字段一律丢弃，防引擎特有参数被滥用）
+TRANSCRIPTION_ALLOWED_FIELDS = {"model", "language", "prompt", "response_format",
+                                "temperature", "timestamp_granularities[]"}
+# 引擎响应头只回 Content-Type（Content-Length 由 Response 自算），不泄露引擎指纹
+RESPONSE_HEADER_ALLOWLIST = {"content-type"}
+
+
+def _sanitize_filename(name: str) -> str:
+    """上传文件名净化：basename + 字符白名单，防容器内路径穿越/控制字符。"""
+    base = os.path.basename(name or "")
+    cleaned = re.sub(r"[^A-Za-z0-9._-]", "_", base).lstrip(".")
+    return cleaned or "audio.bin"
+
+
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(request: Request):
     """OpenAI 批量转写垫片: 透传 multipart 表单, 仅把 model 字段改写为引擎注册名。
 
     引擎只认自己注册的模型名 (见 ENGINE_MODEL), 对外统一暴露 chii-asr;
-    文件与其余表单字段 (language/prompt 等) 原样转发, 响应原样回传。"""
-    if not _authorized(request):
-        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    文件与表单字段白名单 (language/prompt 等) 转发, 响应原样回传。"""
+    # 限流前置：鉴权失败也计桶，在线爆破与未鉴权消耗都有成本
     if not _rate_ok(_client_ip(request.client.host if request.client else "unknown",
                                request.headers)):
         return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
+    if not _authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
     # 上传大小上限：Content-Length 预检 + 读入累计兜底（ chunked 可不带长度；
     # 不设限时整文件会双份驻留门面内存，并发大文件即内存/CPU DoS）
     length = request.headers.get("content-length")
@@ -208,8 +239,8 @@ async def transcriptions(request: Request):
             total += len(content)
             if total > MAX_UPLOAD_BYTES:
                 return JSONResponse({"error": "file too large"}, status_code=413)
-            files[key] = (value.filename, content, value.content_type)
-        else:
+            files[key] = (_sanitize_filename(value.filename), content, value.content_type)
+        elif key in TRANSCRIPTION_ALLOWED_FIELDS:
             data[key] = value
     if "model" not in data:
         data["model"] = ENGINE_MODEL
@@ -218,7 +249,7 @@ async def transcriptions(request: Request):
     except httpx.HTTPError as e:
         return JSONResponse({"error": f"upstream error: {type(e).__name__}"},
                             status_code=502)
-    headers = {k: v for k, v in resp.headers.items() if k.lower() not in HOP_BY_HOP}
+    headers = {k: v for k, v in resp.headers.items() if k.lower() in RESPONSE_HEADER_ALLOWLIST}
     return Response(content=resp.content, status_code=resp.status_code, headers=headers)
 
 
@@ -229,14 +260,16 @@ async def realtime(ws: WebSocket):
     资源防护（引擎流式会话独占 GPU，不设防时挂死连接即可拖垮全服务）：
     每 IP / 全局并发上限、会话最长 WS_SESSION_MAX 秒；空闲超时与音频总量
     上限在适配层逐帧执行（backend_funasr）。"""
-    if ws.query_params.get("api_key") != API_KEY and \
-            ws.headers.get("Authorization", "") != f"Bearer {API_KEY}" and \
-            not _ticket_consume(ws.query_params.get("ticket", "")):
-        await ws.close(code=4401)
-        return
+    # 限流前置（失败也计桶）；票据核销放在限流之后，避免被限流时白白烧掉一次性票据
     ip = _client_ip(ws.client.host if ws.client else "unknown", ws.headers)
     if not _rate_ok(ip):
         await ws.close(code=4429)
+        return
+    # WS 只认 Authorization 头与一次性票据；不再接受 ?api_key=（会进访问日志）
+    auth = ws.headers.get("Authorization", "")
+    if not (auth.lower().startswith("bearer ") and _key_ok(auth[7:].strip())) and \
+            not _ticket_consume(ws.query_params.get("ticket", "")):
+        await ws.close(code=4401)
         return
     global _ws_active_total
     if _ws_active_total >= WS_MAX_GLOBAL or _ws_active[ip] >= WS_MAX_PER_IP:
@@ -269,7 +302,8 @@ def main() -> None:
           f"  /v1/models /v1/audio/transcriptions /v1/realtime"
           f" → {ENGINE_HTTP_URL} / {ENGINE_WS_URL}", file=sys.stderr)
     uvicorn.run(app, host=BIND, port=port,
-                ssl_certfile=SSL_CERTFILE or None, ssl_keyfile=SSL_KEYFILE or None)
+                ssl_certfile=SSL_CERTFILE or None, ssl_keyfile=SSL_KEYFILE or None,
+                limit_concurrency=128, timeout_keep_alive=30)
 
 
 if __name__ == "__main__":

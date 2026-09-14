@@ -38,11 +38,16 @@ LANGUAGE_MAP = {"ja": "日本語", "zh": "中文", "en": "English"}
 
 
 def _to_engine_commands(start: dict) -> list:
-    """统一 start 帧 → 引擎命令序列 (START 后按需要追加 LANGUAGE 等)。"""
+    """统一 start 帧 → 引擎命令序列 (START 后按需要追加 LANGUAGE 等)。
+
+    language 只接受 LANGUAGE_MAP 的键：引擎控制帧是纯文本命令 (START/LANGUAGE:/
+    HOTWORDS: 等), 白名单外的值原样透传等于让客户端直接写引擎命令行。"""
     cmds = ["START"]
     lang = str(start.get("language") or "")
     if lang and lang != "auto":
-        cmds.append(f"LANGUAGE:{LANGUAGE_MAP.get(lang, lang)}")
+        if lang not in LANGUAGE_MAP:
+            raise ValueError(f"unsupported language: {lang!r}")
+        cmds.append(f"LANGUAGE:{LANGUAGE_MAP[lang]}")
     return cmds
 
 
@@ -98,8 +103,14 @@ async def handle_realtime(client, engine_url: str) -> None:
 
     sentences: list = []
     try:
+        commands = _to_engine_commands(start)
+    except ValueError as e:
+        await client.send_json({"type": "error", "message": str(e)})
+        await client.close(code=1002)
+        return
+    try:
         async with websockets.connect(engine_url, max_size=None) as engine:
-            for cmd in _to_engine_commands(start):
+            for cmd in commands:
                 await engine.send(cmd)
             stopped = False
 

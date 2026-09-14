@@ -53,7 +53,9 @@ async def stream(path: str, language: str) -> None:
 
     ws_url = BASE_URL.replace("http", "ws", 1) + "/v1/realtime"
     chunk = sample_rate * 2 // 10  # 100ms 一块 (PCM16 = 2 字节/采样)
-    async with websockets.connect(f"{ws_url}?api_key={API_KEY}", max_size=None) as ws:
+    # 鉴权走 Authorization 头（?api_key= 会进门面/反代访问日志，已弃用）
+    async with websockets.connect(ws_url, max_size=None,
+                                  additional_headers={"Authorization": f"Bearer {API_KEY}"}) as ws:
         await ws.send(json.dumps({"type": "start", "language": language,
                                   "sample_rate": sample_rate}, ensure_ascii=False))
 

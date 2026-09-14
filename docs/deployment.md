@@ -159,13 +159,14 @@ sudo chown ubuntu:ubuntu /etc/chobits-chii-asr.key /etc/chobits-chii-asr.crt   #
 ## 6. 验证
 
 ```bash
-# 批量转写 (未启用 TLS 时用 http 并去掉 -k)
-curl -k -X POST https://<服务器IP>:9881/v1/audio/transcriptions \
+# 批量转写（生产门面绑回环、TLS 由 Caddy 终结，在服务器本机验证用 http://127.0.0.1；
+# 不再提供 curl -k 示例——跳过证书校验等于放弃对中间人的全部防护）
+curl -X POST http://127.0.0.1:9881/v1/audio/transcriptions \
   -H "Authorization: Bearer <API_KEY>" \
   -F "file=@sample.wav" -F "model=chii-asr"
 
 # 流式识别
-CHII_ASR_BASE_URL=https://<服务器IP>:9881 CHII_ASR_API_KEY=<API_KEY> \
+CHII_ASR_BASE_URL=http://127.0.0.1:9881 CHII_ASR_API_KEY=<API_KEY> \
   python3 tools/client_example.py stream sample.wav ja
 ```
 

@@ -12,6 +12,9 @@ EnvironmentFile=/etc/chobits-chii-asr.env
 ExecStart=/bin/bash /home/ubuntu/Github/Chobits-Chii-ASR/tools/start_asr_api.sh 9881
 Restart=always
 RestartSec=3
+LimitNOFILE=65536
+NoNewPrivileges=true
+PrivateTmp=true
 
 [Install]
 WantedBy=multi-user.target

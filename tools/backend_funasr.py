@@ -22,6 +22,7 @@
 import asyncio
 import json
 import os
+import sys
 
 import websockets
 
@@ -66,8 +67,9 @@ async def _forward_engine_message(client, raw, sentences: list) -> bool:
         return False
     event = data.get("event")
     if event == "error":
-        await client.send_json({"type": "error",
-                                "message": str(data.get("error", "engine error"))})
+        # 引擎错误原文不外发（含内部细节），固定文案；原文进门面日志排障
+        sys.stderr.write(f"[asr] engine error event: {data.get('error')!r}\n")
+        await client.send_json({"type": "error", "message": "引擎识别错误，请重试"})
         return True
     if event == "stopped":
         return True
@@ -178,9 +180,9 @@ async def handle_realtime(client, engine_url: str) -> None:
             except Exception:
                 pass
     except (OSError, websockets.WebSocketException) as e:
+        sys.stderr.write(f"[asr] engine connect failed: {type(e).__name__}: {e}\n")
         try:
-            await client.send_json({"type": "error",
-                                    "message": f"引擎连接失败: {type(e).__name__}"})
+            await client.send_json({"type": "error", "message": "引擎连接失败"})
             await client.close(code=1011)
         except Exception:
             pass

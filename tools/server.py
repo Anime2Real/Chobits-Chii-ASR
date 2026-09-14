@@ -21,7 +21,8 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_ENGINE_MODEL     引擎注册的模型名 (funasr --model-path 模式为 custom), 默认 custom
     CHII_ASR_RATE_LIMIT       每 IP 每分钟限流次数 (转写与流式), 默认 60, 设 0 关闭
     CHII_ASR_MAX_UPLOAD_BYTES 批量转写上传上限 (字节), 默认 25MB
-    CHII_ASR_WS_MAX_PER_IP    流式每 IP 并发连接上限, 默认 4
+    CHII_ASR_WS_MAX_PER_CLIENT  流式每客户端并发连接上限, 默认 4 (按票据身份计数,
+                                无身份时回退按 IP; 旧名 CHII_ASR_WS_MAX_PER_IP 兼容读取)
     CHII_ASR_WS_MAX_GLOBAL    流式全局并发连接上限, 默认 32
     CHII_ASR_WS_SESSION_MAX   流式会话最长秒数, 默认 300
     CHII_ASR_WS_IDLE_SECONDS  流式空闲超时秒数 (无帧即断), 默认 60
@@ -36,6 +37,7 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
 """
 
 import asyncio
+import base64
 import hashlib
 import hmac
 import os
@@ -61,39 +63,54 @@ TICKET_SECRET = _getenv("TICKET_SECRET")
 BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网见下方 TLS 守卫
 
 
-def _ticket_consume(ticket: str) -> bool:
-    """校验并核销短时票据 "<expiry>.<jti>.<hmac16>"：HMAC-SHA256 签名 + 60 秒有效
-    + 随机 jti 单次使用（验过即作废，防 60s 窗口内重放/一票多开）。"""
+def _ticket_consume(ticket: str) -> tuple[bool, str | None]:
+    """校验并核销短时票据：HMAC-SHA256 签名 + 60 秒有效 + 随机 jti 单次使用
+    （验过即作废，防 60s 窗口内重放/一票多开）。两种格式均兼容：
+      旧版 "<exp>.<jti>.<sig>"（无身份）
+      新版 "<exp>.<jti>.<idb64>.<sig>"（idb64 = base64url(调用方身份)，被签名覆盖）
+    返回 (是否有效, 身份或 None)；身份供按客户端并发计数，无身份时回退按 IP。"""
     if not TICKET_SECRET:
-        return False
+        return False, None
     parts = ticket.split(".")
-    if len(parts) != 3:
-        return False
-    exp_str, jti, sig = parts
+    if len(parts) == 3:
+        exp_str, jti, sig = parts
+        idb64 = ""
+    elif len(parts) == 4:
+        exp_str, jti, idb64, sig = parts
+    else:
+        return False, None
     try:
         exp = int(exp_str)
     except ValueError:
-        return False
+        return False, None
     now = int(time.time())
     if exp <= now:
-        return False
-    if not jti or len(jti) > 64:
-        return False
+        return False, None
+    if not jti or len(jti) > 64 or len(idb64) > 256:
+        return False, None
+    signed = f"asr-realtime.{exp}.{jti}" + (f".{idb64}" if idb64 else "")
     expected = hmac.new(TICKET_SECRET.encode(),
-                        f"asr-realtime.{exp}.{jti}".encode(), hashlib.sha256).hexdigest()[:32]
+                        signed.encode(), hashlib.sha256).hexdigest()[:32]
     if not hmac.compare_digest(sig, expected):
-        return False
+        return False, None
+    identity = None
+    if idb64:
+        try:
+            identity = base64.urlsafe_b64decode(idb64 + "=" * (-len(idb64) % 4)).decode()
+        except Exception:
+            return False, None
     # 核销：顺手清掉过期项，再查重
     for used_jti in [k for k, used_exp in _used_tickets.items() if used_exp <= now]:
         del _used_tickets[used_jti]
     if jti in _used_tickets:
-        return False
+        return False, None
     _used_tickets[jti] = exp
-    return True
+    return True, identity
 
 RATE_LIMIT = int(_getenv("RATE_LIMIT", "60"))
 MAX_UPLOAD_BYTES = int(_getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
-WS_MAX_PER_IP = int(_getenv("WS_MAX_PER_IP", "4"))
+# 新名优先；旧名 CHII_ASR_WS_MAX_PER_IP 兼容读取（语义已由每 IP 改为每客户端身份）
+WS_MAX_PER_CLIENT = int(_getenv("WS_MAX_PER_CLIENT", _getenv("WS_MAX_PER_IP", "4")))
 WS_MAX_GLOBAL = int(_getenv("WS_MAX_GLOBAL", "32"))
 WS_SESSION_MAX = float(_getenv("WS_SESSION_MAX", "300"))
 BACKEND = _getenv("BACKEND", "funasr")
@@ -134,7 +151,7 @@ app = FastAPI(title="chobits-chii-asr", docs_url=None, redoc_url=None)
 _engine = httpx.AsyncClient(base_url=ENGINE_HTTP_URL, timeout=httpx.Timeout(300.0))
 _hits: dict[str, deque] = defaultdict(deque)
 _used_tickets: dict[str, int] = {}  # jti -> exp，核销集合（过期即清）
-_ws_active: dict[str, int] = defaultdict(int)  # ip -> 在途流式连接数
+_ws_active: dict[str, int] = defaultdict(int)  # 并发桶 ("id:<身份>" 或 "ip:<ip>") -> 在途流式连接数
 _ws_active_total = 0
 
 
@@ -185,7 +202,8 @@ def _rate_ok(ip: str) -> bool:
 
 @app.get("/healthz")
 async def healthz():
-    return {"status": "ok", "model": ASR_MODEL, "backend": BACKEND}
+    # 不回 backend 字段（免鉴权端点不暴露引擎指纹）
+    return {"status": "ok", "model": ASR_MODEL}
 
 
 @app.get("/v1/models")
@@ -258,8 +276,8 @@ async def realtime(ws: WebSocket):
     """统一流式识别入口: 鉴权/限流/并发准入后交给当前后端的适配层。
 
     资源防护（引擎流式会话独占 GPU，不设防时挂死连接即可拖垮全服务）：
-    每 IP / 全局并发上限、会话最长 WS_SESSION_MAX 秒；空闲超时与音频总量
-    上限在适配层逐帧执行（backend_funasr）。"""
+    每客户端身份（无身份回退每 IP）/ 全局并发上限、会话最长 WS_SESSION_MAX 秒；
+    空闲超时与音频总量上限在适配层逐帧执行（backend_funasr）。"""
     # 限流前置（失败也计桶）；票据核销放在限流之后，避免被限流时白白烧掉一次性票据
     ip = _client_ip(ws.client.host if ws.client else "unknown", ws.headers)
     if not _rate_ok(ip):
@@ -267,15 +285,20 @@ async def realtime(ws: WebSocket):
         return
     # WS 只认 Authorization 头与一次性票据；不再接受 ?api_key=（会进访问日志）
     auth = ws.headers.get("Authorization", "")
-    if not (auth.lower().startswith("bearer ") and _key_ok(auth[7:].strip())) and \
-            not _ticket_consume(ws.query_params.get("ticket", "")):
-        await ws.close(code=4401)
-        return
+    identity = None
+    if not (auth.lower().startswith("bearer ") and _key_ok(auth[7:].strip())):
+        ok, identity = _ticket_consume(ws.query_params.get("ticket", ""))
+        if not ok:
+            await ws.close(code=4401)
+            return
+    # 并发准入：票据携带身份时按身份计数（同一 NAT/出口 IP 下各客户端独立配额），
+    # 无身份（旧票据 / API key 直连）回退按 IP 计数；全局上限不变
+    bucket = f"id:{identity}" if identity else f"ip:{ip}"
     global _ws_active_total
-    if _ws_active_total >= WS_MAX_GLOBAL or _ws_active[ip] >= WS_MAX_PER_IP:
+    if _ws_active_total >= WS_MAX_GLOBAL or _ws_active[bucket] >= WS_MAX_PER_CLIENT:
         await ws.close(code=4429)
         return
-    _ws_active[ip] += 1
+    _ws_active[bucket] += 1
     _ws_active_total += 1
     await ws.accept()
     try:
@@ -289,10 +312,10 @@ async def realtime(ws: WebSocket):
             pass
     finally:
         _ws_active_total -= 1
-        if _ws_active[ip] <= 1:
-            _ws_active.pop(ip, None)
+        if _ws_active[bucket] <= 1:
+            _ws_active.pop(bucket, None)
         else:
-            _ws_active[ip] -= 1
+            _ws_active[bucket] -= 1
 
 
 def main() -> None:

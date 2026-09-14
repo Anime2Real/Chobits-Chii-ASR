@@ -137,6 +137,14 @@ sudo systemctl daemon-reload && sudo systemctl enable --now chobits-chii-asr
 journalctl -u chobits-chii-asr -f
 ```
 
+> 2026-09-14 安全加固（均有 env 可调，默认值见 `deploy/chobits-chii-asr.env.example`）：
+> - 批量转写上传上限 25MB（`CHII_ASR_MAX_UPLOAD_BYTES`，Content-Length 预检 + 读入累计兜底）；
+> - WS 流式资源防护：每 IP / 全局并发上限（4 / 32）、会话最长 300s、空闲 60s 即断、
+>   单会话音频总量 10MB——此前挂死连接即可耗尽引擎 GPU 会话；
+> - WS 票据改为 `<exp>.<jti>.<sig>`，jti 核销、单次使用（与垫片同步更新）；
+> - 限流改按真实客户端 IP：对端为本机（Caddy/垫片）时采信 XFF 末跳
+>   （Caddy asr-ws 段与垫片透传均已配合覆盖/转发 XFF），直连不采信 XFF。
+
 ## 5. TLS（可选，公网强烈建议）
 
 ```bash

@@ -21,11 +21,17 @@
 
 import asyncio
 import json
+import os
 
 import websockets
 
 # 客户端发 stop 后等引擎吐完 final 的最长秒数
 DRAIN_TIMEOUT = 10.0
+
+# 资源防护（环境变量可调）：空闲超时（无帧即断）与单会话音频总量上限。
+# 不设防时客户端发完 start 后挂起不动即可永久占用一条引擎流式会话（独占 GPU）
+IDLE_TIMEOUT = float(os.environ.get("CHII_ASR_WS_IDLE_SECONDS", "60"))
+MAX_AUDIO_BYTES = int(os.environ.get("CHII_ASR_WS_MAX_AUDIO_BYTES", str(10 * 1024 * 1024)))
 
 # 统一协议的 ISO 语言码 → 引擎语言提示语 (引擎 --language 示例: 中文, English, 日本語)
 LANGUAGE_MAP = {"ja": "日本語", "zh": "中文", "en": "English"}
@@ -98,13 +104,29 @@ async def handle_realtime(client, engine_url: str) -> None:
             stopped = False
 
             async def pump_in() -> None:
-                """客户端 → 引擎: 二进制帧原样转发, stop 控制帧翻译为 STOP。"""
+                """客户端 → 引擎: 二进制帧原样转发, stop 控制帧翻译为 STOP。
+                逐帧执行空闲超时与音频总量上限，超限主动结束会话。"""
                 nonlocal stopped
+                audio_bytes = 0
                 while True:
-                    msg = await client.receive()
+                    try:
+                        msg = await asyncio.wait_for(client.receive(), timeout=IDLE_TIMEOUT)
+                    except asyncio.TimeoutError:
+                        try:
+                            await client.send_json({"type": "error", "message": "空闲超时，连接关闭"})
+                        except Exception:
+                            pass
+                        return
                     if msg["type"] == "websocket.disconnect":
                         return
                     if msg.get("bytes") is not None:
+                        audio_bytes += len(msg["bytes"])
+                        if audio_bytes > MAX_AUDIO_BYTES:
+                            try:
+                                await client.send_json({"type": "error", "message": "音频总量超限，连接关闭"})
+                            except Exception:
+                                pass
+                            return
                         await engine.send(msg["bytes"])
                     elif msg.get("text"):
                         try:

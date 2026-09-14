@@ -20,6 +20,12 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_ENGINE_WS_URL    引擎 WS 地址, 默认 ws://127.0.0.1:10095
     CHII_ASR_ENGINE_MODEL     引擎注册的模型名 (funasr --model-path 模式为 custom), 默认 custom
     CHII_ASR_RATE_LIMIT       每 IP 每分钟限流次数 (转写与流式), 默认 60, 设 0 关闭
+    CHII_ASR_MAX_UPLOAD_BYTES 批量转写上传上限 (字节), 默认 25MB
+    CHII_ASR_WS_MAX_PER_IP    流式每 IP 并发连接上限, 默认 4
+    CHII_ASR_WS_MAX_GLOBAL    流式全局并发连接上限, 默认 32
+    CHII_ASR_WS_SESSION_MAX   流式会话最长秒数, 默认 300
+    CHII_ASR_WS_IDLE_SECONDS  流式空闲超时秒数 (无帧即断), 默认 60
+    CHII_ASR_WS_MAX_AUDIO_BYTES 流式单会话音频总量上限 (字节), 默认 10MB
     CHII_ASR_SSL_CERTFILE / CHII_ASR_SSL_KEYFILE  同时设置则以 HTTPS/WSS 启动
 
 用法:
@@ -29,6 +35,7 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
 面向公众分发应用时, 建议由后端服务代为调用, 不要把唯一密钥嵌进客户端。
 """
 
+import asyncio
 import hashlib
 import hmac
 import os
@@ -53,22 +60,41 @@ TICKET_SECRET = _getenv("TICKET_SECRET")
 BIND = _getenv("BIND", "0.0.0.0")  # 生产走 Caddy 反代时绑 127.0.0.1
 
 
-def _ticket_ok(ticket: str) -> bool:
-    """校验短时票据 "<expiry_unix_ts>.<hmac16>"(HMAC-SHA256 签名, 60 秒有效)。"""
-    if not TICKET_SECRET or "." not in ticket:
+def _ticket_consume(ticket: str) -> bool:
+    """校验并核销短时票据 "<expiry>.<jti>.<hmac16>"：HMAC-SHA256 签名 + 60 秒有效
+    + 随机 jti 单次使用（验过即作废，防 60s 窗口内重放/一票多开）。"""
+    if not TICKET_SECRET:
         return False
-    exp_str, sig = ticket.rsplit(".", 1)
+    parts = ticket.split(".")
+    if len(parts) != 3:
+        return False
+    exp_str, jti, sig = parts
     try:
         exp = int(exp_str)
     except ValueError:
         return False
-    if exp < int(time.time()):
+    now = int(time.time())
+    if exp <= now:
+        return False
+    if not jti or len(jti) > 64:
         return False
     expected = hmac.new(TICKET_SECRET.encode(),
-                        f"asr-realtime.{exp}".encode(), hashlib.sha256).hexdigest()[:32]
-    return hmac.compare_digest(sig, expected)
+                        f"asr-realtime.{exp}.{jti}".encode(), hashlib.sha256).hexdigest()[:32]
+    if not hmac.compare_digest(sig, expected):
+        return False
+    # 核销：顺手清掉过期项，再查重
+    for used_jti in [k for k, used_exp in _used_tickets.items() if used_exp <= now]:
+        del _used_tickets[used_jti]
+    if jti in _used_tickets:
+        return False
+    _used_tickets[jti] = exp
+    return True
 
 RATE_LIMIT = int(_getenv("RATE_LIMIT", "60"))
+MAX_UPLOAD_BYTES = int(_getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+WS_MAX_PER_IP = int(_getenv("WS_MAX_PER_IP", "4"))
+WS_MAX_GLOBAL = int(_getenv("WS_MAX_GLOBAL", "32"))
+WS_SESSION_MAX = float(_getenv("WS_SESSION_MAX", "300"))
 BACKEND = _getenv("BACKEND", "funasr")
 ENGINE_HTTP_URL = _getenv("ENGINE_HTTP_URL", "http://127.0.0.1:9001").rstrip("/")
 ENGINE_WS_URL = _getenv("ENGINE_WS_URL", "ws://127.0.0.1:10095")
@@ -102,6 +128,20 @@ HOP_BY_HOP = {"connection", "keep-alive", "transfer-encoding", "content-length",
 app = FastAPI(title="chobits-chii-asr", docs_url=None, redoc_url=None)
 _engine = httpx.AsyncClient(base_url=ENGINE_HTTP_URL, timeout=httpx.Timeout(300.0))
 _hits: dict[str, deque] = defaultdict(deque)
+_used_tickets: dict[str, int] = {}  # jti -> exp，核销集合（过期即清）
+_ws_active: dict[str, int] = defaultdict(int)  # ip -> 在途流式连接数
+_ws_active_total = 0
+
+
+def _client_ip(host: str, headers) -> str:
+    """真实客户端 IP：对端为本机（Caddy/LLM 垫片）时采信 X-Forwarded-For
+    最后一跳（反代把真实 IP 追加在尾部，取第一跳会被客户端伪造绕过——
+    且 Caddy 侧已用 header_up 覆盖伪造值）；直连不采信 XFF。"""
+    if host == "127.0.0.1":
+        xff = headers.get("x-forwarded-for", "")
+        if xff:
+            return xff.split(",")[-1].strip()
+    return host
 
 
 def _authorized(request: Request) -> bool:
@@ -118,6 +158,9 @@ def _rate_ok(ip: str) -> bool:
     q = _hits[ip]
     while q and now - q[0] > 60:
         q.popleft()
+    if not q:
+        _hits.pop(ip, None)  # 过期清空即删键，防海量 IP 键只增不清
+        q = _hits[ip]
     if len(q) >= RATE_LIMIT:
         return False
     q.append(now)
@@ -146,15 +189,26 @@ async def transcriptions(request: Request):
     文件与其余表单字段 (language/prompt 等) 原样转发, 响应原样回传。"""
     if not _authorized(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
-    if not _rate_ok(request.client.host if request.client else "unknown"):
+    if not _rate_ok(_client_ip(request.client.host if request.client else "unknown",
+                               request.headers)):
         return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
+    # 上传大小上限：Content-Length 预检 + 读入累计兜底（ chunked 可不带长度；
+    # 不设限时整文件会双份驻留门面内存，并发大文件即内存/CPU DoS）
+    length = request.headers.get("content-length")
+    if length and int(length) > MAX_UPLOAD_BYTES:
+        return JSONResponse({"error": "file too large"}, status_code=413)
     data: dict = {}
     files: dict = {}
+    total = 0
     for key, value in (await request.form()).multi_items():
         if key == "model":
             data[key] = ENGINE_MODEL
         elif isinstance(value, UploadFile):
-            files[key] = (value.filename, await value.read(), value.content_type)
+            content = await value.read()
+            total += len(content)
+            if total > MAX_UPLOAD_BYTES:
+                return JSONResponse({"error": "file too large"}, status_code=413)
+            files[key] = (value.filename, content, value.content_type)
         else:
             data[key] = value
     if "model" not in data:
@@ -170,24 +224,42 @@ async def transcriptions(request: Request):
 
 @app.websocket("/v1/realtime")
 async def realtime(ws: WebSocket):
-    """统一流式识别入口: 鉴权/限流后交给当前后端的适配层。"""
+    """统一流式识别入口: 鉴权/限流/并发准入后交给当前后端的适配层。
+
+    资源防护（引擎流式会话独占 GPU，不设防时挂死连接即可拖垮全服务）：
+    每 IP / 全局并发上限、会话最长 WS_SESSION_MAX 秒；空闲超时与音频总量
+    上限在适配层逐帧执行（backend_funasr）。"""
     if ws.query_params.get("api_key") != API_KEY and \
             ws.headers.get("Authorization", "") != f"Bearer {API_KEY}" and \
-            not _ticket_ok(ws.query_params.get("ticket", "")):
+            not _ticket_consume(ws.query_params.get("ticket", "")):
         await ws.close(code=4401)
         return
-    if not _rate_ok(ws.client.host if ws.client else "unknown"):
+    ip = _client_ip(ws.client.host if ws.client else "unknown", ws.headers)
+    if not _rate_ok(ip):
         await ws.close(code=4429)
         return
+    global _ws_active_total
+    if _ws_active_total >= WS_MAX_GLOBAL or _ws_active[ip] >= WS_MAX_PER_IP:
+        await ws.close(code=4429)
+        return
+    _ws_active[ip] += 1
+    _ws_active_total += 1
     await ws.accept()
     try:
-        await backend.handle_realtime(ws, ENGINE_WS_URL)
-    except Exception as e:  # 适配层异常不暴露内部细节
+        await asyncio.wait_for(backend.handle_realtime(ws, ENGINE_WS_URL),
+                               timeout=WS_SESSION_MAX)
+    except Exception as e:  # 适配层异常/会话超时都不暴露内部细节
         sys.stderr.write(f"[asr] realtime aborted: {type(e).__name__}: {e}\n")
         try:
             await ws.close(code=1011)
         except Exception:
             pass
+    finally:
+        _ws_active_total -= 1
+        if _ws_active[ip] <= 1:
+            _ws_active.pop(ip, None)
+        else:
+            _ws_active[ip] -= 1
 
 
 def main() -> None:

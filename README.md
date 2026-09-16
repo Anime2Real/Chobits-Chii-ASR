@@ -4,20 +4,20 @@
 	<p>OpenAI 兼容的批量转写与 WebSocket 流式识别服务：Fun-ASR-Nano-2512 驱动，并为 Qwen3-ASR 预留后端抽象。</p>
 	<p>
 		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
-		<a href="https://github.com/chenxin199305/Chobits-Chii-ASR"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--ASR-181717?logo=github"></a>
+		<a href="https://github.com/Anime2Real/Chobits-Chii-ASR"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--ASR-181717?logo=github"></a>
 		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow"></a>
 		<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="License: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
 		<img alt="Language: Japanese" src="https://img.shields.io/badge/Language-Japanese-green.svg">
 	</p>
 </div>
 
-> 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/chenxin199305/Chobits-Chii-ASR) 点个 Star —— 你的支持能让更多人发现小叽！
+> 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-ASR) 点个 Star —— 你的支持能让更多人发现小叽！
 
 > ✅ 2026-09-12 生产上线：Fun-ASR-Nano 批量/流式全链路在 Tesla T4 服务器运行中（批量走 CPU、流式独占 GPU 的共存拓扑，见 [docs/deployment.md](docs/deployment.md)）。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 
-本项目在服务器部署 [Fun-ASR-Nano-2512](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512)（阿里通义实验室，0.8B，支持中/英/日及中文方言），提供 OpenAI 兼容的批量转写与 WebSocket 流式识别接口，并为未来切换到 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 预留了后端抽象。评测数据来自 [Chobits-Chii-Voice](https://github.com/chenxin199305/Chobits-Chii-Voice) 数据集。
+本项目在服务器部署 [Fun-ASR-Nano-2512](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512)（阿里通义实验室，0.8B，支持中/英/日及中文方言），提供 OpenAI 兼容的批量转写与 WebSocket 流式识别接口，并为未来切换到 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 预留了后端抽象。评测数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集。
 
 > ⚠️ 注意：原始动画音频的版权归其权利方所有。本项目仅供学习与研究使用，请勿用于商业用途。
 
@@ -35,7 +35,7 @@
   funasr-realtime-server  流式 WebSocket 服务 (:10095, vLLM)
 ```
 
-与家族其他服务（[LLM](https://github.com/chenxin199305/Chobits-Chii-LLM) / [TTS](https://github.com/chenxin199305/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与协议垫片，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。
+与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与协议垫片，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。
 
 ## 🔀 为切换 Qwen3-ASR 做的准备
 
@@ -178,8 +178,8 @@ python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag 
 
 ## 🙏 相关项目
 
-- [Chobits-Chii-Voice](https://github.com/chenxin199305/Chobits-Chii-Voice) — 小叽语音数据集（本项目的评测数据来源）
-- [Chobits-Chii-TTS](https://github.com/chenxin199305/Chobits-Chii-TTS) — 小叽声线 TTS（与本项目互补：一个合成声音，一个识别声音）
-- [Chobits-Chii-LLM](https://github.com/chenxin199305/Chobits-Chii-LLM) — 小叽人格对话/翻译服务（可与本项目串联成语音对话链路）
+- [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) — 小叽语音数据集（本项目的评测数据来源）
+- [Chobits-Chii-TTS](https://github.com/Anime2Real/Chobits-Chii-TTS) — 小叽声线 TTS（与本项目互补：一个合成声音，一个识别声音）
+- [Chobits-Chii-LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) — 小叽人格对话/翻译服务（可与本项目串联成语音对话链路）
 - [Fun-ASR](https://github.com/QwenAudio/Fun-ASR) / [FunASR](https://github.com/modelscope/FunASR) — 底层语音识别引擎
 - [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) — 备选语音识别引擎

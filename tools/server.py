@@ -243,6 +243,12 @@ async def transcriptions(request: Request):
         return JSONResponse({"error": "rate limit exceeded"}, status_code=429)
     if not _authorized(request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
+    # 审计日志（journald 自带时间戳）：key 哈希 + 客户端 IP + 请求体长度，
+    # 不记明文 key；格式与 TTS 门面中间件审计行一致，同一套 grep/journalctl 可查
+    print(f"[audit] /v1/audio/transcriptions"
+          f" key={_auth.key_digest(extract_bearer_token(request.headers))}"
+          f" ip={_client_ip(request.client.host if request.client else 'unknown', request.headers)}"
+          f" len={request.headers.get('content-length', '?')}", file=sys.stderr)
     # 上传大小上限：Content-Length 预检 + 读入累计兜底（ chunked 可不带长度；
     # 不设限时整文件会双份驻留门面内存，并发大文件即内存/CPU DoS）
     length = request.headers.get("content-length")

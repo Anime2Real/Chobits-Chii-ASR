@@ -1,5 +1,6 @@
 """tools/server.py 端点级测试：TestClient + 内存假引擎（不触真实 :9001/:10095）。"""
 import asyncio
+import hashlib
 from contextlib import ExitStack
 
 import httpx
@@ -8,7 +9,7 @@ from fastapi.testclient import TestClient
 from starlette.websockets import WebSocketDisconnect
 
 import server
-from conftest import AUTH, make_ticket
+from conftest import AUTH, API_KEY, make_ticket
 
 
 @pytest.fixture
@@ -107,6 +108,21 @@ def test_transcription_success_passthrough(client, monkeypatch):
 
 def test_transcription_no_key_401(client):
     assert _upload(client, headers={}).status_code == 401
+
+
+def test_transcription_audit_log_line(client, monkeypatch, capsys):
+    # 审计行格式与 TTS 门面中间件一致（key 哈希 + IP + 请求体长度），不记明文 key；
+    # 鉴权失败的请求不记（与 TTS 中间件"验过 key 才记"对齐）
+    engine = FakeEngine(resp=FakeResp(200, b'{"text": "hello"}'))
+    monkeypatch.setattr(server, "_engine", engine)
+    _upload(client, headers={})  # 401 无审计行
+    assert _upload(client).status_code == 200
+    digest = hashlib.sha256(API_KEY.encode()).hexdigest()[:12]
+    lines = [l for l in capsys.readouterr().err.splitlines() if l.startswith("[audit] ")]
+    assert len(lines) == 1
+    (line,) = lines
+    assert line.startswith(f"[audit] /v1/audio/transcriptions key={digest} ip=testclient len=")
+    assert API_KEY not in line  # 明文 key 不落日志
 
 
 # --- 流式 WS：并发准入 -------------------------------------------------------------

@@ -1,0 +1,161 @@
+"""tools/server.py 纯逻辑单元测试：票据核销 / 配置容错 / XFF（不触网络）。"""
+import base64
+import time
+from types import SimpleNamespace
+
+import server
+from conftest import make_ticket
+
+
+# --- _ticket_consume ----------------------------------------------------------
+
+def test_ticket_old_3part_format_valid():
+    ok, identity = server._ticket_consume(make_ticket())
+    assert ok is True
+    assert identity is None
+
+
+def test_ticket_new_4part_format_extracts_identity():
+    ok, identity = server._ticket_consume(make_ticket(identity="acct:user-42"))
+    assert ok is True
+    assert identity == "acct:user-42"
+
+
+def test_ticket_guest_identity():
+    ok, identity = server._ticket_consume(make_ticket(identity="guest:abc123"))
+    assert ok is True
+    assert identity == "guest:abc123"
+
+
+def test_ticket_bad_signature_rejected():
+    ticket = make_ticket(identity="acct:u1")
+    parts = ticket.split(".")
+    parts[-1] = "0" * 32
+    ok, identity = server._ticket_consume(".".join(parts))
+    assert ok is False
+    assert identity is None
+
+
+def test_ticket_wrong_secret_rejected():
+    ok, _ = server._ticket_consume(make_ticket(secret="other-secret"))
+    assert ok is False
+
+
+def test_ticket_expired_rejected():
+    ok, _ = server._ticket_consume(make_ticket(exp=int(time.time()) - 1))
+    assert ok is False
+
+
+def test_ticket_malformed_rejected():
+    assert server._ticket_consume("")[0] is False
+    assert server._ticket_consume("a.b")[0] is False
+    assert server._ticket_consume("a.b.c.d.e")[0] is False
+    assert server._ticket_consume("notanint.jti.sig")[0] is False
+
+
+def test_ticket_empty_jti_rejected():
+    exp = int(time.time()) + 60
+    assert server._ticket_consume("%d..%s" % (exp, "0" * 32))[0] is False
+
+
+def test_ticket_invalid_idb64_rejected():
+    # 签名合法但 idb64 解不出身份 → 拒绝（构造：正常票据换掉 idb64 后重签）
+    exp = int(time.time()) + 60
+    jti = "jti-badid"
+    idb64 = "a"  # 长度 %4==1，补 padding 也无法解码
+    import hashlib
+    import hmac
+    signed = "asr-realtime.%d.%s.%s" % (exp, jti, idb64)
+    sig = hmac.new(server.TICKET_SECRET.encode(),
+                   signed.encode(), hashlib.sha256).hexdigest()[:32]
+    ok, _ = server._ticket_consume("%d.%s.%s.%s" % (exp, jti, idb64, sig))
+    assert ok is False
+
+
+def test_ticket_jti_single_use():
+    ticket = make_ticket(jti="jti-once")
+    assert server._ticket_consume(ticket)[0] is True
+    # 同一票据第二次使用（60s 窗口内重放 / 一票多开）必须被拒
+    assert server._ticket_consume(ticket)[0] is False
+
+
+def test_ticket_distinct_jti_both_valid():
+    assert server._ticket_consume(make_ticket(jti="jti-a"))[0] is True
+    assert server._ticket_consume(make_ticket(jti="jti-b"))[0] is True
+
+
+def test_ticket_consume_purges_expired_used_jti():
+    ticket = make_ticket(jti="jti-old", exp=int(time.time()) + 1)
+    assert server._ticket_consume(ticket)[0] is True
+    server._used_tickets["jti-old"] = int(time.time()) - 1  # 模拟已过期
+    server._ticket_consume(make_ticket(jti="jti-new"))
+    assert "jti-old" not in server._used_tickets
+
+
+def test_ticket_no_secret_rejects(monkeypatch):
+    monkeypatch.setattr(server, "TICKET_SECRET", "")
+    ok, _ = server._ticket_consume(make_ticket())
+    assert ok is False
+
+
+# --- _getenv_int / _getenv_float ---------------------------------------------
+
+def test_getenv_int_valid(monkeypatch):
+    monkeypatch.setenv("CHII_ASR_FOO", "42")
+    assert server._getenv_int("FOO", 7) == 42
+
+
+def test_getenv_int_invalid_falls_back(monkeypatch):
+    monkeypatch.setenv("CHII_ASR_FOO", "abc")
+    assert server._getenv_int("FOO", 7) == 7
+
+
+def test_getenv_int_empty_falls_back(monkeypatch):
+    monkeypatch.delenv("CHII_ASR_FOO", raising=False)
+    assert server._getenv_int("FOO", 7) == 7
+
+
+def test_getenv_float_valid(monkeypatch):
+    monkeypatch.setenv("CHII_ASR_BAR", "2.5")
+    assert server._getenv_float("BAR", 1.0) == 2.5
+
+
+def test_getenv_float_invalid_falls_back(monkeypatch):
+    monkeypatch.setenv("CHII_ASR_BAR", "1.5x")
+    assert server._getenv_float("BAR", 1.0) == 1.0
+
+
+# --- _client_ip ----------------------------------------------------------------
+
+def test_client_ip_loopback_trusts_xff_last_hop():
+    headers = {"x-forwarded-for": "1.1.1.1, 2.2.2.2, 203.0.113.9"}
+    assert server._client_ip("127.0.0.1", headers) == "203.0.113.9"
+
+
+def test_client_ip_loopback_without_xff():
+    assert server._client_ip("127.0.0.1", {}) == "127.0.0.1"
+
+
+def test_client_ip_direct_ignores_xff():
+    headers = {"x-forwarded-for": "203.0.113.9"}
+    assert server._client_ip("198.51.100.7", headers) == "198.51.100.7"
+
+
+# --- 鉴权 helper -----------------------------------------------------------------
+
+def test_authorized_bearer_only():
+    ok_req = SimpleNamespace(headers={"Authorization": "Bearer test-asr-key"})
+    assert server._authorized(ok_req) is True
+    no_header = SimpleNamespace(headers={})
+    assert server._authorized(no_header) is False
+    basic = SimpleNamespace(headers={"Authorization": "Basic test-asr-key"})
+    assert server._authorized(basic) is False
+    wrong = SimpleNamespace(headers={"Authorization": "Bearer wrong"})
+    assert server._authorized(wrong) is False
+
+
+def test_sanitize_filename():
+    assert server._sanitize_filename("../../etc/passwd") == "passwd"
+    assert server._sanitize_filename("a b/c;rm -rf.wav") == "c_rm_-rf.wav"
+    assert server._sanitize_filename("") == "audio.bin"
+    assert server._sanitize_filename("...") == "audio.bin"

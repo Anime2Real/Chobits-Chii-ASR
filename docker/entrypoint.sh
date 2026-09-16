@@ -27,6 +27,7 @@ HTTP_PID=$!
 # 等批量服务就绪 (AutoModel 常驻显存) 后再起 WS: vLLM 按"当前剩余显存"配比,
 # 两服务并发启动会互相看不见对方而超发, 实测会把后加载的一方挤到 OOM
 echo "[engine] 等待 HTTP 批量服务就绪..."
+READY=0
 for _ in $(seq 1 120); do
     if python -c "
 import urllib.request, urllib.error, sys
@@ -37,6 +38,7 @@ except urllib.error.HTTPError:
 except Exception:
     sys.exit(1)
 " 2>/dev/null; then
+        READY=1
         break
     fi
     if ! kill -0 "$HTTP_PID" 2>/dev/null; then
@@ -45,6 +47,12 @@ except Exception:
     fi
     sleep 5
 done
+# 探测用尽后不得继续：半残状态下 WS 照样拉起，日志还在撒谎说"已就绪"；
+# 非零退出交给 docker --restart 策略重建
+if [ "$READY" -ne 1 ]; then
+    echo "[engine] 等待 HTTP 批量服务就绪超时（120 次探测，约 10 分钟），放弃启动" >&2
+    exit 1
+fi
 echo "[engine] HTTP 批量服务已就绪"
 
 # --enforce-eager: 不捕获 CUDA graph, 与批量服务共用一张卡时省显存

@@ -52,6 +52,30 @@ def _getenv(suffix: str, default: str = "") -> str:
     return os.environ.get(f"CHII_ASR_{suffix}", default)
 
 
+def _getenv_int(suffix: str, default: int) -> int:
+    """整型配置容错：非法值回退默认并告警（直接 traceback 会被 Restart=always 放大成崩溃循环）。"""
+    raw = _getenv(suffix)
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        print(f"[警告] CHII_ASR_{suffix}={raw!r} 不是合法整数，回退默认值 {default}", file=sys.stderr)
+        return default
+
+
+def _getenv_float(suffix: str, default: float) -> float:
+    """浮点配置容错：同 _getenv_int 的理由。"""
+    raw = _getenv(suffix)
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        print(f"[警告] CHII_ASR_{suffix}={raw!r} 不是合法数值，回退默认值 {default}", file=sys.stderr)
+        return default
+
+
 API_KEY = _getenv("API_KEY")
 if not API_KEY:
     sys.exit("[错误] 未设置 CHII_ASR_API_KEY 环境变量, 拒绝以无鉴权方式启动")
@@ -107,12 +131,13 @@ def _ticket_consume(ticket: str) -> tuple[bool, str | None]:
     _used_tickets[jti] = exp
     return True, identity
 
-RATE_LIMIT = int(_getenv("RATE_LIMIT", "60"))
-MAX_UPLOAD_BYTES = int(_getenv("MAX_UPLOAD_BYTES", str(25 * 1024 * 1024)))
+RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
+MAX_UPLOAD_BYTES = _getenv_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
 # 新名优先；旧名 CHII_ASR_WS_MAX_PER_IP 兼容读取（语义已由每 IP 改为每客户端身份）
-WS_MAX_PER_CLIENT = int(_getenv("WS_MAX_PER_CLIENT", _getenv("WS_MAX_PER_IP", "4")))
-WS_MAX_GLOBAL = int(_getenv("WS_MAX_GLOBAL", "32"))
-WS_SESSION_MAX = float(_getenv("WS_SESSION_MAX", "300"))
+WS_MAX_PER_CLIENT = _getenv_int(
+    "WS_MAX_PER_CLIENT" if _getenv("WS_MAX_PER_CLIENT") else "WS_MAX_PER_IP", 4)
+WS_MAX_GLOBAL = _getenv_int("WS_MAX_GLOBAL", 32)
+WS_SESSION_MAX = _getenv_float("WS_SESSION_MAX", 300.0)
 BACKEND = _getenv("BACKEND", "funasr")
 ENGINE_HTTP_URL = _getenv("ENGINE_HTTP_URL", "http://127.0.0.1:9001").rstrip("/")
 ENGINE_WS_URL = _getenv("ENGINE_WS_URL", "ws://127.0.0.1:10095")
@@ -267,6 +292,14 @@ async def transcriptions(request: Request):
     except httpx.HTTPError as e:
         return JSONResponse({"error": f"upstream error: {type(e).__name__}"},
                             status_code=502)
+    # 引擎错误体不原样回传（含容器内路径/栈细节）：5xx 回写通用错误（对齐 TTS 门面
+    # 做法），4xx 保留状态码语义但不带引擎内部细节；原文进门面日志排障
+    if resp.status_code >= 400:
+        sys.stderr.write(f"[asr] engine {resp.status_code}: {resp.content[:200]!r}\n")
+        if resp.status_code >= 500:
+            return JSONResponse({"error": "asr engine error"}, status_code=502)
+        return JSONResponse({"error": "transcription request rejected"},
+                            status_code=resp.status_code)
     headers = {k: v for k, v in resp.headers.items() if k.lower() in RESPONSE_HEADER_ALLOWLIST}
     return Response(content=resp.content, status_code=resp.status_code, headers=headers)
 
@@ -319,7 +352,7 @@ async def realtime(ws: WebSocket):
 
 
 def main() -> None:
-    port = int(sys.argv[1]) if len(sys.argv) > 1 else int(_getenv("PORT", "9881"))
+    port = int(sys.argv[1]) if len(sys.argv) > 1 else _getenv_int("PORT", 9881)
     scheme = "https" if SSL_CERTFILE else "http"
     print(f"[asr] {scheme}://{BIND}:{port}  backend={BACKEND}"
           f"  /v1/models /v1/audio/transcriptions /v1/realtime"

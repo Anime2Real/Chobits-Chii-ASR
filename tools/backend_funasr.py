@@ -29,10 +29,35 @@ import websockets
 # 客户端发 stop 后等引擎吐完 final 的最长秒数
 DRAIN_TIMEOUT = 10.0
 
+
+def _env_float(name: str, default: float) -> float:
+    """数值配置容错：非法值回退默认并告警（裸 float()/int() 的 traceback 会被
+    Restart=always 放大成崩溃循环；与 tools/server.py 门面侧 helper 同款）。"""
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return float(raw)
+    except ValueError:
+        sys.stderr.write(f"[asr] [警告] {name}={raw!r} 不是合法数值，回退默认值 {default}\n")
+        return default
+
+
+def _env_int(name: str, default: int) -> int:
+    raw = os.environ.get(name, "")
+    if not raw:
+        return default
+    try:
+        return int(raw)
+    except ValueError:
+        sys.stderr.write(f"[asr] [警告] {name}={raw!r} 不是合法整数，回退默认值 {default}\n")
+        return default
+
+
 # 资源防护（环境变量可调）：空闲超时（无帧即断）与单会话音频总量上限。
 # 不设防时客户端发完 start 后挂起不动即可永久占用一条引擎流式会话（独占 GPU）
-IDLE_TIMEOUT = float(os.environ.get("CHII_ASR_WS_IDLE_SECONDS", "60"))
-MAX_AUDIO_BYTES = int(os.environ.get("CHII_ASR_WS_MAX_AUDIO_BYTES", str(10 * 1024 * 1024)))
+IDLE_TIMEOUT = _env_float("CHII_ASR_WS_IDLE_SECONDS", 60.0)
+MAX_AUDIO_BYTES = _env_int("CHII_ASR_WS_MAX_AUDIO_BYTES", 10 * 1024 * 1024)
 
 # 统一协议的 ISO 语言码 → 引擎语言提示语 (引擎 --language 示例: 中文, English, 日本語)
 LANGUAGE_MAP = {"ja": "日本語", "zh": "中文", "en": "English"}
@@ -97,7 +122,14 @@ async def handle_realtime(client, engine_url: str) -> None:
         await client.send_json({"type": "error", "message": "首帧必须是 {\"type\": \"start\", ...}"})
         await client.close(code=1002)
         return
-    if int(start.get("sample_rate", 16000)) != 16000:
+    raw_rate = start.get("sample_rate")
+    try:
+        sample_rate = int(16000 if raw_rate is None else raw_rate)
+    except (TypeError, ValueError):
+        await client.send_json({"type": "error", "message": "sample_rate 必须是整数（目前只支持 16000）"})
+        await client.close(code=1002)
+        return
+    if sample_rate != 16000:
         await client.send_json({"type": "error",
                                 "message": "Fun-ASR-Nano 引擎只接受 16kHz PCM16, 请客户端先重采样"})
         await client.close(code=1002)
@@ -115,11 +147,12 @@ async def handle_realtime(client, engine_url: str) -> None:
             for cmd in commands:
                 await engine.send(cmd)
             stopped = False
+            client_gone = False
 
             async def pump_in() -> None:
                 """客户端 → 引擎: 二进制帧原样转发, stop 控制帧翻译为 STOP。
                 逐帧执行空闲超时与音频总量上限，超限主动结束会话。"""
-                nonlocal stopped
+                nonlocal stopped, client_gone
                 audio_bytes = 0
                 while True:
                     try:
@@ -131,6 +164,7 @@ async def handle_realtime(client, engine_url: str) -> None:
                             pass
                         return
                     if msg["type"] == "websocket.disconnect":
+                        client_gone = True
                         return
                     if msg.get("bytes") is not None:
                         audio_bytes += len(msg["bytes"])
@@ -161,8 +195,13 @@ async def handle_realtime(client, engine_url: str) -> None:
             t_out = asyncio.create_task(pump_out())
             done, pending = await asyncio.wait({t_in, t_out},
                                                return_when=asyncio.FIRST_COMPLETED)
-            # 客户端侧先结束: 补发 STOP (客户端断开时), 并等引擎把 final 吐完
-            if t_in in done and not t_out.done():
+            # 已完成任务如带异常必须 retrieve，否则 GC 时抛 "exception was never retrieved"
+            for t in done:
+                if not t.cancelled() and t.exception() is not None:
+                    sys.stderr.write(f"[asr] realtime pump failed: {t.exception()!r}\n")
+            # 客户端侧先结束: 补发 STOP (客户端断开时), 并等引擎把 final 吐完。
+            # 客户端已断开时跳过——补发/drain 只对还连着、主动 stop 的客户端有意义
+            if t_in in done and not t_out.done() and not client_gone:
                 if not stopped:
                     try:
                         await engine.send("STOP")
@@ -174,6 +213,8 @@ async def handle_realtime(client, engine_url: str) -> None:
                     pass
             for t in pending:
                 t.cancel()
+            if pending:
+                await asyncio.gather(*pending, return_exceptions=True)
             # 结果已吐完, 礼貌关闭客户端连接 (直接 return 会没有 close 帧)
             try:
                 await client.close()

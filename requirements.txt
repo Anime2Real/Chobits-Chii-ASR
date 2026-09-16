@@ -1,7 +1,9 @@
 # 门面 (tools/server.py) 依赖: OpenAI 兼容 HTTP 代理 + WebSocket 流式网关
-# 家族其他仓库无 requirements.txt, 本仓库因门面需要 WebSocket 能力 (标准库不够) 而破例
-fastapi
-uvicorn
-httpx
-websockets
-python-multipart
+# TTS 门面 (Chobits-Chii-TTS) 同样配有 requirements.txt; 本仓库因门面需要 WebSocket 能力 (标准库不够) 额外依赖 websockets
+# 版本组合已在 Python 3.12 + 门面测试套件验证（2026-09-16）
+fastapi==0.141.1
+uvicorn==0.53.0
+httpx==0.28.1
+websockets==17.1
+python-multipart==0.0.32
+# 测试依赖 (仅跑 tests/ 需要, 门面运行不需要): pytest==9.1.1

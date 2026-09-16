@@ -7,22 +7,25 @@ import server
 from conftest import make_ticket
 
 
-# --- _ticket_consume ----------------------------------------------------------
+# --- _ticket_verify / _ticket_mark_used ---------------------------------------
 
 def test_ticket_old_3part_format_valid():
-    ok, identity = server._ticket_consume(make_ticket())
+    ok, identity, pending = server._ticket_verify(make_ticket())
     assert ok is True
     assert identity is None
+    assert pending is not None
 
 
 def test_ticket_new_4part_format_extracts_identity():
-    ok, identity = server._ticket_consume(make_ticket(identity="acct:user-42"))
+    ticket = make_ticket(identity="acct:user-42")
+    ok, identity, pending = server._ticket_verify(ticket)
     assert ok is True
     assert identity == "acct:user-42"
+    assert pending == ("jti-1", int(ticket.split(".")[0]))
 
 
 def test_ticket_guest_identity():
-    ok, identity = server._ticket_consume(make_ticket(identity="guest:abc123"))
+    ok, identity, _ = server._ticket_verify(make_ticket(identity="guest:abc123"))
     assert ok is True
     assert identity == "guest:abc123"
 
@@ -31,31 +34,32 @@ def test_ticket_bad_signature_rejected():
     ticket = make_ticket(identity="acct:u1")
     parts = ticket.split(".")
     parts[-1] = "0" * 32
-    ok, identity = server._ticket_consume(".".join(parts))
+    ok, identity, pending = server._ticket_verify(".".join(parts))
     assert ok is False
     assert identity is None
+    assert pending is None
 
 
 def test_ticket_wrong_secret_rejected():
-    ok, _ = server._ticket_consume(make_ticket(secret="other-secret"))
+    ok, _, _ = server._ticket_verify(make_ticket(secret="other-secret"))
     assert ok is False
 
 
 def test_ticket_expired_rejected():
-    ok, _ = server._ticket_consume(make_ticket(exp=int(time.time()) - 1))
+    ok, _, _ = server._ticket_verify(make_ticket(exp=int(time.time()) - 1))
     assert ok is False
 
 
 def test_ticket_malformed_rejected():
-    assert server._ticket_consume("")[0] is False
-    assert server._ticket_consume("a.b")[0] is False
-    assert server._ticket_consume("a.b.c.d.e")[0] is False
-    assert server._ticket_consume("notanint.jti.sig")[0] is False
+    assert server._ticket_verify("")[0] is False
+    assert server._ticket_verify("a.b")[0] is False
+    assert server._ticket_verify("a.b.c.d.e")[0] is False
+    assert server._ticket_verify("notanint.jti.sig")[0] is False
 
 
 def test_ticket_empty_jti_rejected():
     exp = int(time.time()) + 60
-    assert server._ticket_consume("%d..%s" % (exp, "0" * 32))[0] is False
+    assert server._ticket_verify("%d..%s" % (exp, "0" * 32))[0] is False
 
 
 def test_ticket_invalid_idb64_rejected():
@@ -68,33 +72,45 @@ def test_ticket_invalid_idb64_rejected():
     signed = "asr-realtime.%d.%s.%s" % (exp, jti, idb64)
     sig = hmac.new(server.TICKET_SECRET.encode(),
                    signed.encode(), hashlib.sha256).hexdigest()[:32]
-    ok, _ = server._ticket_consume("%d.%s.%s.%s" % (exp, jti, idb64, sig))
+    ok, _, _ = server._ticket_verify("%d.%s.%s.%s" % (exp, jti, idb64, sig))
     assert ok is False
 
 
-def test_ticket_jti_single_use():
+def test_ticket_verify_does_not_consume():
+    # 验签本身不核销：同一票据在未 mark_used 前可重复通过查重
+    ticket = make_ticket(jti="jti-pending")
+    assert server._ticket_verify(ticket)[0] is True
+    assert server._ticket_verify(ticket)[0] is True
+    assert "jti-pending" not in server._used_tickets
+
+
+def test_ticket_jti_single_use_after_mark_used():
+    # 核销（accept 后由门面调用 _ticket_mark_used）后 60s 窗口内重放必须被拒
     ticket = make_ticket(jti="jti-once")
-    assert server._ticket_consume(ticket)[0] is True
-    # 同一票据第二次使用（60s 窗口内重放 / 一票多开）必须被拒
-    assert server._ticket_consume(ticket)[0] is False
+    ok, _, pending = server._ticket_verify(ticket)
+    assert ok is True
+    server._ticket_mark_used(*pending)
+    assert server._ticket_verify(ticket)[0] is False
 
 
 def test_ticket_distinct_jti_both_valid():
-    assert server._ticket_consume(make_ticket(jti="jti-a"))[0] is True
-    assert server._ticket_consume(make_ticket(jti="jti-b"))[0] is True
+    assert server._ticket_verify(make_ticket(jti="jti-a"))[0] is True
+    assert server._ticket_verify(make_ticket(jti="jti-b"))[0] is True
 
 
-def test_ticket_consume_purges_expired_used_jti():
+def test_ticket_verify_purges_expired_used_jti():
     ticket = make_ticket(jti="jti-old", exp=int(time.time()) + 1)
-    assert server._ticket_consume(ticket)[0] is True
+    ok, _, pending = server._ticket_verify(ticket)
+    assert ok is True
+    server._ticket_mark_used(*pending)
     server._used_tickets["jti-old"] = int(time.time()) - 1  # 模拟已过期
-    server._ticket_consume(make_ticket(jti="jti-new"))
+    server._ticket_verify(make_ticket(jti="jti-new"))
     assert "jti-old" not in server._used_tickets
 
 
 def test_ticket_no_secret_rejects(monkeypatch):
     monkeypatch.setattr(server, "TICKET_SECRET", "")
-    ok, _ = server._ticket_consume(make_ticket())
+    ok, _, _ = server._ticket_verify(make_ticket())
     assert ok is False
 
 

@@ -27,10 +27,12 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_WS_SESSION_MAX   流式会话最长秒数, 默认 300
     CHII_ASR_WS_IDLE_SECONDS  流式空闲超时秒数 (无帧即断), 默认 60
     CHII_ASR_WS_MAX_AUDIO_BYTES 流式单会话音频总量上限 (字节), 默认 10MB
+    CHII_ASR_WS_MAX_FRAME_BYTES 流式客户端单帧音频上限 (字节), 默认 1MB, 超限 error 帧 + close 1009
     CHII_ASR_SSL_CERTFILE / CHII_ASR_SSL_KEYFILE  同时设置则以 HTTPS/WSS 启动
 
 用法:
-    python3 tools/server.py [端口, 默认 9881]
+    python3 tools/server.py [端口, 默认 9881]   (默认绑 127.0.0.1, 生产由 Caddy 反代;
+                                     显式绑非回环地址须同时配 TLS, 否则拒绝启动)
 
 注意: 未启用 TLS 时 API Key 明文传输, 仅适合内网/低风险公网场景;
 面向公众分发应用时, 建议由后端服务代为调用, 不要把唯一密钥嵌进客户端。
@@ -44,41 +46,34 @@ import os
 import re
 import sys
 import time
-from collections import defaultdict, deque
+from collections import defaultdict
 
+from chii_facade_common import (
+    ApiKeyAuth,
+    EnvConfig,
+    SlidingWindowRateLimiter,
+    client_ip as _client_ip,
+    engine_error_body,
+    extract_bearer_token,
+    filter_response_headers,
+)
 
-def _getenv(suffix: str, default: str = "") -> str:
-    """读取 CHII_ASR_<suffix> 环境变量。"""
-    return os.environ.get(f"CHII_ASR_{suffix}", default)
+# 公共逻辑（env 容错解析 / XFF 真实 IP / key 校验 / 限流桶 / 错误通用化 / 响应头白名单）
+# 源自共享库 chii_facade_common（CloudDeploy 仓库 tools/chii-facade-common，兄弟目录 editable 安装）：
+# 安全加固只改共享库一处，两门面同步生效，勿在本地重建副本。
 
-
-def _getenv_int(suffix: str, default: int) -> int:
-    """整型配置容错：非法值回退默认并告警（直接 traceback 会被 Restart=always 放大成崩溃循环）。"""
-    raw = _getenv(suffix)
-    if not raw:
-        return default
-    try:
-        return int(raw)
-    except ValueError:
-        print(f"[警告] CHII_ASR_{suffix}={raw!r} 不是合法整数，回退默认值 {default}", file=sys.stderr)
-        return default
-
-
-def _getenv_float(suffix: str, default: float) -> float:
-    """浮点配置容错：同 _getenv_int 的理由。"""
-    raw = _getenv(suffix)
-    if not raw:
-        return default
-    try:
-        return float(raw)
-    except ValueError:
-        print(f"[警告] CHII_ASR_{suffix}={raw!r} 不是合法数值，回退默认值 {default}", file=sys.stderr)
-        return default
+_env = EnvConfig("CHII_ASR_")
+_getenv = _env.get
+_getenv_int = _env.get_int
+_getenv_float = _env.get_float
 
 
 API_KEY = _getenv("API_KEY")
 if not API_KEY:
     sys.exit("[错误] 未设置 CHII_ASR_API_KEY 环境变量, 拒绝以无鉴权方式启动")
+
+_auth = ApiKeyAuth(API_KEY)
+_key_ok = _auth.key_ok
 
 # 与签发服务 (newapi_provision.py) 共享的 WS 票据签名密钥：
 # app 先经垫片 /v1/asr/ticket 换短时票据，再用票据直连 /v1/realtime，
@@ -87,14 +82,17 @@ TICKET_SECRET = _getenv("TICKET_SECRET")
 BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网见下方 TLS 守卫
 
 
-def _ticket_consume(ticket: str) -> tuple[bool, str | None]:
-    """校验并核销短时票据：HMAC-SHA256 签名 + 60 秒有效 + 随机 jti 单次使用
-    （验过即作废，防 60s 窗口内重放/一票多开）。两种格式均兼容：
+def _ticket_verify(ticket: str) -> tuple[bool, str | None, tuple[str, int] | None]:
+    """校验短时票据（不核销）：HMAC-SHA256 签名 + 60 秒有效 + jti 查重
+    （已核销的 jti 拒收，防 60s 窗口内重放/一票多开）。两种格式均兼容：
       旧版 "<exp>.<jti>.<sig>"（无身份）
       新版 "<exp>.<jti>.<idb64>.<sig>"（idb64 = base64url(调用方身份)，被签名覆盖）
-    返回 (是否有效, 身份或 None)；身份供按客户端并发计数，无身份时回退按 IP。"""
+    返回 (是否有效, 身份或 None, 核销凭据 (jti, exp) 或 None)。凭据不在这里写入
+    _used_tickets：仅验签与查重前置，真正的核销由 _ticket_mark_used 在
+    ws.accept() 之后执行，保证并发超限等拒绝路径不消耗一次性票据。
+    身份供按客户端并发计数，无身份时回退按 IP。"""
     if not TICKET_SECRET:
-        return False, None
+        return False, None, None
     parts = ticket.split(".")
     if len(parts) == 3:
         exp_str, jti, sig = parts
@@ -102,34 +100,42 @@ def _ticket_consume(ticket: str) -> tuple[bool, str | None]:
     elif len(parts) == 4:
         exp_str, jti, idb64, sig = parts
     else:
-        return False, None
+        return False, None, None
     try:
         exp = int(exp_str)
     except ValueError:
-        return False, None
+        return False, None, None
     now = int(time.time())
     if exp <= now:
-        return False, None
+        return False, None, None
     if not jti or len(jti) > 64 or len(idb64) > 256:
-        return False, None
+        return False, None, None
     signed = f"asr-realtime.{exp}.{jti}" + (f".{idb64}" if idb64 else "")
     expected = hmac.new(TICKET_SECRET.encode(),
                         signed.encode(), hashlib.sha256).hexdigest()[:32]
     if not hmac.compare_digest(sig, expected):
-        return False, None
+        return False, None, None
     identity = None
     if idb64:
         try:
             identity = base64.urlsafe_b64decode(idb64 + "=" * (-len(idb64) % 4)).decode()
         except Exception:
-            return False, None
-    # 核销：顺手清掉过期项，再查重
+            return False, None, None
+    # 查重（不写入）：顺手清掉过期项，再查 jti 是否已核销
     for used_jti in [k for k, used_exp in _used_tickets.items() if used_exp <= now]:
         del _used_tickets[used_jti]
     if jti in _used_tickets:
-        return False, None
+        return False, None, None
+    return True, identity, (jti, exp)
+
+
+def _ticket_mark_used(jti: str, exp: int) -> None:
+    """ws.accept() 之后核销一次性票据（写入 _used_tickets）。
+    验签与查重已在 _ticket_verify 前置；验签到核销之间仍有竞态窗口 —— 同一张
+    票的两个连接可在窗口内先后通过查重并双双准入。残余窗口可接受：它只在
+    客户端主动一票多开时出现，远好于旧语义（先烧后拒，第 5 个并发连接被 4429
+    拒绝时票据已作废，换票重连风暴必失败）。"""
     _used_tickets[jti] = exp
-    return True, identity
 
 RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
 MAX_UPLOAD_BYTES = _getenv_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
@@ -174,55 +180,26 @@ ASR_MODEL = "chii-asr"
 
 app = FastAPI(title="chobits-chii-asr", docs_url=None, redoc_url=None)
 _engine = httpx.AsyncClient(base_url=ENGINE_HTTP_URL, timeout=httpx.Timeout(300.0))
-_hits: dict[str, deque] = defaultdict(deque)
 _used_tickets: dict[str, int] = {}  # jti -> exp，核销集合（过期即清）
 _ws_active: dict[str, int] = defaultdict(int)  # 并发桶 ("id:<身份>" 或 "ip:<ip>") -> 在途流式连接数
 _ws_active_total = 0
 
-
-def _client_ip(host: str, headers) -> str:
-    """真实客户端 IP：对端为本机（Caddy/LLM 垫片）时采信 X-Forwarded-For
-    最后一跳（反代把真实 IP 追加在尾部，取第一跳会被客户端伪造绕过——
-    且 Caddy 侧已用 header_up 覆盖伪造值）；直连不采信 XFF。"""
-    if host == "127.0.0.1":
-        xff = headers.get("x-forwarded-for", "")
-        if xff:
-            return xff.split(",")[-1].strip()
-    return host
-
-
-def _key_ok(provided: str) -> bool:
-    """常量时间比较 API key（远程时序攻击难利用，但修复零成本）。"""
-    if not provided:
-        return False
-    return hmac.compare_digest(
-        hashlib.sha256(provided.encode()).digest(),
-        hashlib.sha256(API_KEY.encode()).digest())
+# 滑动窗口限流桶（共享库 SlidingWindowRateLimiter）；RATE_LIMIT 在检查路径上
+# 同步进 limiter，保持 monkeypatch 模块常量即时生效的行为不变
+_rate_limiter = SlidingWindowRateLimiter(RATE_LIMIT)
 
 
 def _authorized(request: Request) -> bool:
     # 只认 Authorization 头；不再接受 ?api_key=（query string 会进访问日志）
-    auth = request.headers.get("Authorization", "")
-    if not auth.lower().startswith("bearer "):
-        return False
-    return _key_ok(auth[7:].strip())
+    return _key_ok(extract_bearer_token(request.headers))
 
 
 def _rate_ok(ip: str) -> bool:
     """滑动窗口限流: 每 IP 每分钟 RATE_LIMIT 次, 0 关闭。"""
     if RATE_LIMIT <= 0:
         return True
-    now = time.monotonic()
-    q = _hits[ip]
-    while q and now - q[0] > 60:
-        q.popleft()
-    if not q:
-        _hits.pop(ip, None)  # 过期清空即删键，防海量 IP 键只增不清
-        q = _hits[ip]
-    if len(q) >= RATE_LIMIT:
-        return False
-    q.append(now)
-    return True
+    _rate_limiter.limit = RATE_LIMIT
+    return _rate_limiter.allow(ip)
 
 
 @app.get("/healthz")
@@ -243,8 +220,8 @@ async def models(request: Request):
 # 转写透传的表单字段白名单（其余字段一律丢弃，防引擎特有参数被滥用）
 TRANSCRIPTION_ALLOWED_FIELDS = {"model", "language", "prompt", "response_format",
                                 "temperature", "timestamp_granularities[]"}
-# 引擎响应头只回 Content-Type（Content-Length 由 Response 自算），不泄露引擎指纹
-RESPONSE_HEADER_ALLOWLIST = {"content-type"}
+# 引擎响应头白名单（content-type 以外一律不回，防泄露引擎指纹）见共享库
+# filter_response_headers 的默认白名单
 
 
 def _sanitize_filename(name: str) -> str:
@@ -297,10 +274,10 @@ async def transcriptions(request: Request):
     if resp.status_code >= 400:
         sys.stderr.write(f"[asr] engine {resp.status_code}: {resp.content[:200]!r}\n")
         if resp.status_code >= 500:
-            return JSONResponse({"error": "asr engine error"}, status_code=502)
+            return JSONResponse(engine_error_body("asr"), status_code=502)
         return JSONResponse({"error": "transcription request rejected"},
                             status_code=resp.status_code)
-    headers = {k: v for k, v in resp.headers.items() if k.lower() in RESPONSE_HEADER_ALLOWLIST}
+    headers = filter_response_headers(resp.headers)
     return Response(content=resp.content, status_code=resp.status_code, headers=headers)
 
 
@@ -311,7 +288,7 @@ async def realtime(ws: WebSocket):
     资源防护（引擎流式会话独占 GPU，不设防时挂死连接即可拖垮全服务）：
     每客户端身份（无身份回退每 IP）/ 全局并发上限、会话最长 WS_SESSION_MAX 秒；
     空闲超时与音频总量上限在适配层逐帧执行（backend_funasr）。"""
-    # 限流前置（失败也计桶）；票据核销放在限流之后，避免被限流时白白烧掉一次性票据
+    # 限流前置（失败也计桶）；验签前置但此刻不核销 —— 见下方 accept 后的说明
     ip = _client_ip(ws.client.host if ws.client else "unknown", ws.headers)
     if not _rate_ok(ip):
         await ws.close(code=4429)
@@ -319,13 +296,16 @@ async def realtime(ws: WebSocket):
     # WS 只认 Authorization 头与一次性票据；不再接受 ?api_key=（会进访问日志）
     auth = ws.headers.get("Authorization", "")
     identity = None
+    ticket_pending: tuple[str, int] | None = None  # 验签通过，accept 后才核销
     if not (auth.lower().startswith("bearer ") and _key_ok(auth[7:].strip())):
-        ok, identity = _ticket_consume(ws.query_params.get("ticket", ""))
+        ok, identity, ticket_pending = _ticket_verify(ws.query_params.get("ticket", ""))
         if not ok:
             await ws.close(code=4401)
             return
     # 并发准入：票据携带身份时按身份计数（同一 NAT/出口 IP 下各客户端独立配额），
-    # 无身份（旧票据 / API key 直连）回退按 IP 计数；全局上限不变
+    # 无身份（旧票据 / API key 直连）回退按 IP 计数；全局上限不变。
+    # 注意：此处拒绝（4429）不得消耗一次性票据，否则客户端并发重连风暴下
+    # 被拒连接的票据已被烧掉，换票必然失败
     bucket = f"id:{identity}" if identity else f"ip:{ip}"
     global _ws_active_total
     if _ws_active_total >= WS_MAX_GLOBAL or _ws_active[bucket] >= WS_MAX_PER_CLIENT:
@@ -334,6 +314,10 @@ async def realtime(ws: WebSocket):
     _ws_active[bucket] += 1
     _ws_active_total += 1
     await ws.accept()
+    # accept 完成后才核销：并发超限/验签失败的拒绝路径都不烧票。
+    # 剩余竞态窗口（验签→核销之间同 jti 一票多开可双双准入）见 _ticket_mark_used
+    if ticket_pending is not None:
+        _ticket_mark_used(*ticket_pending)
     try:
         await asyncio.wait_for(backend.handle_realtime(ws, ENGINE_WS_URL),
                                timeout=WS_SESSION_MAX)

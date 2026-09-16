@@ -104,25 +104,16 @@ bash tools/start_asr_api.sh 9881     # 首次运行自动建 .venv 装依赖
 
 ## 4. systemd 守护（生产）
 
-```ini
-# /etc/systemd/system/chobits-chii-asr.service
-[Unit]
-Description=Chobits Chii ASR (Fun-ASR-Nano facade)
-After=network-online.target docker.service
-Wants=network-online.target
+unit 以仓库 [deploy/chobits-chii-asr.service](../deploy/chobits-chii-asr.service) 为唯一事实源——
+本文不再内嵌全文（避免双份漂移，改动只改 deploy/ 那一处）：
 
-[Service]
-Type=simple
-User=ubuntu
-ExecStart=/bin/bash /home/ubuntu/Github/Chobits-Chii-ASR/tools/start_asr_api.sh 9881
-Restart=on-failure
-RestartSec=5
-LimitNOFILE=65536
-EnvironmentFile=/etc/chobits-chii-asr.env
-
-[Install]
-WantedBy=multi-user.target
+```bash
+sudo cp deploy/chobits-chii-asr.service /etc/systemd/system/chobits-chii-asr.service
 ```
+
+unit 要点：`Restart=always` + `RestartSec=3`（崩溃/启动失败快速拉起）、
+`NoNewPrivileges=true` / `PrivateTmp=true` 加固、`EnvironmentFile` 注入密钥、
+`LimitNOFILE=65536`、`After=docker.service` 保证引擎容器先就绪。
 
 ```bash
 # /etc/chobits-chii-asr.env (chmod 600), 内容:

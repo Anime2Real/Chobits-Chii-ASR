@@ -3,12 +3,23 @@
 门面对客户端暴露的统一协议 (WS /v1/realtime):
     客户端 → 服务端:
         文本帧 {"type": "start", "language": "ja"|"zh"|..., "sample_rate": 16000}  (首帧, 必填)
-        二进制帧: PCM16 单声道音频块 (必须 16kHz, 引擎端固定 16k 不重采样)
+        二进制帧: PCM16 单声道音频块 (必须 16kHz, 引擎端固定 16k 不重采样; 单帧 ≤1MB,
+                  超限直接 error 帧 + close 1009，不进引擎)
         文本帧 {"type": "stop"}                                                     (结束)
     服务端 → 客户端:
         {"type": "partial", "text": "..."}   中间结果 (会随更多音频被修正)
         {"type": "final",   "text": "..."}   一句的定稿结果 (按句下推)
-        {"type": "error",   "message": "..."} 出错后连接随即关闭
+        {"type": "error",   "code": "...", "message": "..."} 出错后连接随即关闭
+
+    error 帧的 code 为稳定枚举 (X-6 协议, 与 LLM/Mascot 门面同一集合, 勿自行增删):
+        engine_error           引擎识别/处理错误 (含引擎侧 PayloadTooBig 等异常 surfaced)
+        engine_conn_failed     连不上引擎 (accept 超时/拒绝)
+        idle_timeout           空闲超时关闭
+        protocol_error         协议错误 (首帧不是 start、start 参数非法等)
+        frame_too_large        单帧超 CHII_ASR_WS_MAX_FRAME_BYTES
+        audio_limit_exceeded   会话音频总量上限触顶
+        internal_error         其他未归类
+    message 为中文兜底文案, 客户端应按 code 本地化, 勿反解 message 文本。
 
 引擎侧 (funasr >=1.4 的 funasr.bin.realtime_ws, 端口默认 10095):
     控制帧是纯文本命令而非 JSON: "START" / "STOP" / "LANGUAGE:<提示语>" / "HOTWORDS:a,b";
@@ -59,6 +70,28 @@ def _env_int(name: str, default: int) -> int:
 IDLE_TIMEOUT = _env_float("CHII_ASR_WS_IDLE_SECONDS", 60.0)
 MAX_AUDIO_BYTES = _env_int("CHII_ASR_WS_MAX_AUDIO_BYTES", 10 * 1024 * 1024)
 
+# 客户端单帧音频上限（默认 1MB）：16kHz PCM16 实时码率仅 32KB/s，单帧超 1MB 必是
+# 异常/恶意客户端；超限直接 error 帧 + close 1009 (message too big)，帧不进引擎
+MAX_FRAME_BYTES = _env_int("CHII_ASR_WS_MAX_FRAME_BYTES", 1024 * 1024)
+
+# WS error 帧的 code 枚举（X-6 协议契约，与 LLM/Mascot 门面一致，勿自行增删枚举值；
+# message 为中文兜底文案，客户端按 code 本地化）。会话时长上限（WS_SESSION_MAX，
+# server.py）实现为直接 close 1011 而非 error 帧，故不占用本枚举。
+ERROR_CODES = frozenset({
+    "engine_error",
+    "engine_conn_failed",
+    "idle_timeout",
+    "protocol_error",
+    "frame_too_large",
+    "audio_limit_exceeded",
+    "internal_error",
+})
+
+# 引擎入站消息上限（4MB）：引擎每条消息都带全量 sentences 历史，长会话单消息持续增长，
+# max_size=None 等于放任单条消息撑爆内存。超限时 websockets 抛 PayloadTooBig
+# (WebSocketException 子类)，经 handle_realtime 异常路径兜住后客户端收到 error 帧
+ENGINE_MAX_MSG_BYTES = 4 * 1024 * 1024
+
 # 统一协议的 ISO 语言码 → 引擎语言提示语 (引擎 --language 示例: 中文, English, 日本語)
 LANGUAGE_MAP = {"ja": "日本語", "zh": "中文", "en": "English"}
 
@@ -94,7 +127,8 @@ async def _forward_engine_message(client, raw, sentences: list) -> bool:
     if event == "error":
         # 引擎错误原文不外发（含内部细节），固定文案；原文进门面日志排障
         sys.stderr.write(f"[asr] engine error event: {data.get('error')!r}\n")
-        await client.send_json({"type": "error", "message": "引擎识别错误，请重试"})
+        await client.send_json({"type": "error", "code": "engine_error",
+                                "message": "引擎识别错误，请重试"})
         return True
     if event == "stopped":
         return True
@@ -119,18 +153,20 @@ async def handle_realtime(client, engine_url: str) -> None:
         await client.close(code=1002)
         return
     if not isinstance(start, dict) or start.get("type") != "start":
-        await client.send_json({"type": "error", "message": "首帧必须是 {\"type\": \"start\", ...}"})
+        await client.send_json({"type": "error", "code": "protocol_error",
+                                "message": "首帧必须是 {\"type\": \"start\", ...}"})
         await client.close(code=1002)
         return
     raw_rate = start.get("sample_rate")
     try:
         sample_rate = int(16000 if raw_rate is None else raw_rate)
     except (TypeError, ValueError):
-        await client.send_json({"type": "error", "message": "sample_rate 必须是整数（目前只支持 16000）"})
+        await client.send_json({"type": "error", "code": "protocol_error",
+                                "message": "sample_rate 必须是整数（目前只支持 16000）"})
         await client.close(code=1002)
         return
     if sample_rate != 16000:
-        await client.send_json({"type": "error",
+        await client.send_json({"type": "error", "code": "protocol_error",
                                 "message": "Fun-ASR-Nano 引擎只接受 16kHz PCM16, 请客户端先重采样"})
         await client.close(code=1002)
         return
@@ -139,11 +175,11 @@ async def handle_realtime(client, engine_url: str) -> None:
     try:
         commands = _to_engine_commands(start)
     except ValueError as e:
-        await client.send_json({"type": "error", "message": str(e)})
+        await client.send_json({"type": "error", "code": "protocol_error", "message": str(e)})
         await client.close(code=1002)
         return
     try:
-        async with websockets.connect(engine_url, max_size=None) as engine:
+        async with websockets.connect(engine_url, max_size=ENGINE_MAX_MSG_BYTES) as engine:
             for cmd in commands:
                 await engine.send(cmd)
             stopped = False
@@ -159,7 +195,8 @@ async def handle_realtime(client, engine_url: str) -> None:
                         msg = await asyncio.wait_for(client.receive(), timeout=IDLE_TIMEOUT)
                     except asyncio.TimeoutError:
                         try:
-                            await client.send_json({"type": "error", "message": "空闲超时，连接关闭"})
+                            await client.send_json({"type": "error", "code": "idle_timeout",
+                                                    "message": "空闲超时，连接关闭"})
                         except Exception:
                             pass
                         return
@@ -167,14 +204,24 @@ async def handle_realtime(client, engine_url: str) -> None:
                         client_gone = True
                         return
                     if msg.get("bytes") is not None:
-                        audio_bytes += len(msg["bytes"])
-                        if audio_bytes > MAX_AUDIO_BYTES:
+                        frame = msg["bytes"]
+                        if len(frame) > MAX_FRAME_BYTES:
                             try:
-                                await client.send_json({"type": "error", "message": "音频总量超限，连接关闭"})
+                                await client.send_json({"type": "error", "code": "frame_too_large",
+                                                        "message": "单帧音频超限（1MB），连接关闭"})
+                                await client.close(code=1009)
                             except Exception:
                                 pass
                             return
-                        await engine.send(msg["bytes"])
+                        audio_bytes += len(frame)
+                        if audio_bytes > MAX_AUDIO_BYTES:
+                            try:
+                                await client.send_json({"type": "error", "code": "audio_limit_exceeded",
+                                                        "message": "音频总量超限，连接关闭"})
+                            except Exception:
+                                pass
+                            return
+                        await engine.send(frame)
                     elif msg.get("text"):
                         try:
                             ctrl = json.loads(msg["text"])
@@ -196,9 +243,11 @@ async def handle_realtime(client, engine_url: str) -> None:
             done, pending = await asyncio.wait({t_in, t_out},
                                                return_when=asyncio.FIRST_COMPLETED)
             # 已完成任务如带异常必须 retrieve，否则 GC 时抛 "exception was never retrieved"
+            pump_failed = False
             for t in done:
                 if not t.cancelled() and t.exception() is not None:
                     sys.stderr.write(f"[asr] realtime pump failed: {t.exception()!r}\n")
+                    pump_failed = True
             # 客户端侧先结束: 补发 STOP (客户端断开时), 并等引擎把 final 吐完。
             # 客户端已断开时跳过——补发/drain 只对还连着、主动 stop 的客户端有意义
             if t_in in done and not t_out.done() and not client_gone:
@@ -215,6 +264,14 @@ async def handle_realtime(client, engine_url: str) -> None:
                 t.cancel()
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
+            # 泵带异常结束（如引擎消息超 ENGINE_MAX_MSG_BYTES 触发 PayloadTooBig）：
+            # 细节已落门面日志，客户端只给通用 error 帧再关（正常 is_final/stop 结束无此帧）
+            if pump_failed and not client_gone:
+                try:
+                    await client.send_json({"type": "error", "code": "engine_error",
+                                            "message": "引擎连接异常，识别中断"})
+                except Exception:
+                    pass
             # 结果已吐完, 礼貌关闭客户端连接 (直接 return 会没有 close 帧)
             try:
                 await client.close()
@@ -223,7 +280,8 @@ async def handle_realtime(client, engine_url: str) -> None:
     except (OSError, websockets.WebSocketException) as e:
         sys.stderr.write(f"[asr] engine connect failed: {type(e).__name__}: {e}\n")
         try:
-            await client.send_json({"type": "error", "message": "引擎连接失败"})
+            await client.send_json({"type": "error", "code": "engine_conn_failed",
+                                    "message": "引擎连接失败"})
             await client.close(code=1011)
         except Exception:
             pass

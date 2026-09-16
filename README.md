@@ -17,7 +17,7 @@
 ## 架构
 
 ```
-客户端 ──TLS + API Key──> 门面 tools/server.py (宿主机 :9881)
+客户端 ──TLS + API Key──> Caddy :443 ──> 门面 tools/server.py (127.0.0.1:9881)
                             │  POST /v1/audio/transcriptions ──> 引擎 HTTP :9001
                             │  WS   /v1/realtime (统一协议) ──> 后端适配层 ──> 引擎 WS :10095
                             ▼
@@ -32,8 +32,20 @@
 
 ## 为切换 Qwen3-ASR 做的准备
 
-- **HTTP 批量转写**：Fun-ASR-Nano（`funasr-server`）与 Qwen3-ASR（`qwen-asr-serve` / `vllm serve`）都原生暴露 `POST /v1/audio/transcriptions`，门面只做透传——切换时只需改三个环境变量，客户端零改动。
-- **WS 流式**：门面定义了统一对外协议（`start`/音频帧/`stop` → `partial`/`final`），协议差异由 `tools/backend_funasr.py` / `tools/backend_qwen3.py` 吸收。Qwen3-ASR 侧流式 shim 见 Roadmap。
+- **HTTP 批量转写**：Fun-ASR-Nano（`funasr-server`）与 Qwen3-ASR（`qwen-asr-serve` / `vllm serve`）都原生暴露 `POST /v1/audio/transcriptions`，门面只做透传——切换时只需改三个环境变量，批量转写客户端零改动。
+- **WS 流式**：门面定义了统一对外协议（`start`/音频帧/`stop` → `partial`/`final`），协议差异由 `tools/backend_funasr.py` / `tools/backend_qwen3.py` 吸收。注意 Qwen3 侧流式 shim 尚未实现（`backend_qwen3.py` 现为报错骨架，连接即收到明确报错并断开），切到 qwen3 后流式在 shim 落地前不可用；Qwen3-ASR 侧流式 shim 见 Roadmap。
+
+出错时服务端下发 `{"type":"error","code":"<CODE>","message":"<中文兜底>"}` 帧后随即关闭连接。`code` 为稳定枚举（X-6 协议，与 LLM/Mascot 门面同一集合），**message 为兜底文案，客户端应按 code 本地化**：
+
+| code | 适用 |
+|---|---|
+| `engine_error` | 引擎识别/处理错误（含引擎侧 PayloadTooBig 等异常 surfaced） |
+| `engine_conn_failed` | 连不上引擎（accept 超时/拒绝） |
+| `idle_timeout` | 空闲超时关闭 |
+| `protocol_error` | 协议错误（首帧不是 start、start 参数非法等） |
+| `frame_too_large` | 单帧超 `CHII_ASR_WS_MAX_FRAME_BYTES` |
+| `audio_limit_exceeded` | 会话音频总量上限触顶（默认 10MB） |
+| `internal_error` | 其他未归类 |
 
 切换步骤（届时）：
 
@@ -56,7 +68,8 @@ Chobits-Chii-ASR/
 ├── README.md               # 本文件
 ├── LICENSE                 # CC BY-NC-SA 4.0
 ├── .gitignore
-├── requirements.txt        # 门面依赖 (家族唯一: 门面需要 WebSocket 能力, 标准库不够)
+├── requirements.txt        # 门面依赖 (含 WebSocket 流式网关所需包, 标准库不够)
+├── deploy/                 # 部署模板 (systemd unit + env 示例)
 ├── docker/                 # 推理引擎镜像
 │   ├── Dockerfile             # Fun-ASR-Nano-2512 引擎 (funasr vLLM 服务栈 + T4 适配)
 │   └── entrypoint.sh          # 单容器双进程: HTTP :9001 + WS :10095
@@ -67,6 +80,7 @@ Chobits-Chii-ASR/
 │   ├── start_asr_api.sh       # 启动门面 (自动建 .venv, 可直接运行或供 systemd 调用)
 │   ├── client_example.py      # 调用示例: 批量转写 + 流式识别
 │   └── eval_chobits.py        # 用 Chobits-Chii-Voice 数据集测 CER (幂等可续跑)
+├── tests/                  # pytest 测试套件 (端点/WS 协议/后端适配, 引擎全 mock)
 ├── data/                   # 评测数据说明 (音频不入库, 复用 Chobits-Chii-Voice)
 ├── examples/               # 示例说明
 ├── docs/
@@ -88,16 +102,19 @@ docker run -d --name chobits-chii-asr-engine --gpus all --restart unless-stopped
   -v $HOME/.cache/modelscope:/root/.cache/modelscope \
   chobits-chii-asr-engine
 
-# 2. 启动门面 (0.0.0.0:9881, 首次自动建 .venv)
+# 2. 启动门面 (默认绑 127.0.0.1:9881, 首次自动建 .venv)
 export CHII_ASR_API_KEY=<随机密钥>   # 必填, 未设置拒绝启动
 bash tools/start_asr_api.sh 9881
 ```
 
-调用（客户端 `baseUrl` 填 `http(s)://<服务器IP>:9881/v1`，`GET /v1/models` 固定返回 `chii-asr`）：
+> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-CloudDeploy/tree/main/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_asr_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-CloudDeploy/tools/chii-facade-common` 以 editable 方式安装；单仓库 clone 需先同级 clone CloudDeploy 仓库，或手动 `pip install -e ../Chobits-Chii-CloudDeploy/tools/chii-facade-common`。改动共享库后须重启门面生效。
+
+调用（在服务器本机验证用 `http://127.0.0.1:9881/v1`；公网由 Caddy 反代终结 TLS——
+客户端经 443 由垫片转发到门面，见 [docs/deployment.md](docs/deployment.md)，`GET /v1/models` 固定返回 `chii-asr`）：
 
 ```bash
 # 批量转写 (OpenAI 兼容协议)
-curl -X POST http://<服务器IP>:9881/v1/audio/transcriptions \
+curl -X POST http://127.0.0.1:9881/v1/audio/transcriptions \
   -H "Authorization: Bearer <API_KEY>" \
   -F "file=@sample.wav" -F "model=chii-asr"
 
@@ -105,11 +122,13 @@ curl -X POST http://<服务器IP>:9881/v1/audio/transcriptions \
 python3 tools/client_example.py stream sample.wav ja
 ```
 
-其他环境变量：`CHII_ASR_RATE_LIMIT`（转写与流式每 IP 每分钟限流次数，默认 60，0 关闭）；
+其他环境变量：`CHII_ASR_BIND`（门面监听地址，默认 `127.0.0.1`；不经 Caddy 直接对外须配下方 SSL env，否则非回环绑定拒绝启动）；
+`CHII_ASR_RATE_LIMIT`（转写与流式每 IP 每分钟限流次数，默认 60，0 关闭）；
 `CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_WS_URL` / `CHII_ASR_ENGINE_MODEL`（切换后端用）；
 `CHII_ASR_SSL_CERTFILE` / `CHII_ASR_SSL_KEYFILE`（同时设置时以 HTTPS/WSS 启动）。
 
-注意在云安全组放行 TCP 9881；引擎端口 9001/10095 不要对外开放。
+Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）下门面绑回环、公网只放行
+TCP 443，安全组**不需要**放行 9881；引擎端口 9001/10095 不要对外开放。
 对外提供服务须遵守 [CC BY-NC-SA 4.0](#许可协议)（非商业）。
 
 ## 评测

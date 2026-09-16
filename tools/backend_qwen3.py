@@ -18,6 +18,8 @@ async def handle_realtime(client, engine_url: str) -> None:
     """流式接口暂未就绪: 明确告知客户端而不是静默失败。"""
     await client.send_json({
         "type": "error",
+        # 枚举见 backend_funasr.ERROR_CODES；未就绪属其他未归类
+        "code": "internal_error",
         "message": "Qwen3-ASR 后端暂不支持流式识别 (WS shim 未实现), "
                    "请使用 POST /v1/audio/transcriptions 批量转写, 详见 README Roadmap",
     })

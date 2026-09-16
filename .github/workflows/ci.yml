@@ -1,0 +1,37 @@
+name: CI
+
+# 暂时停用自动触发（2026-09）：快速迭代期 push 频繁，为节省 Actions 费用。
+# 手动运行：仓库页 Actions → CI → Run workflow。
+# 恢复自动检查：把下面改为
+#   on:
+#     push: { branches: [main] }
+#     pull_request: { branches: [main] }
+on: workflow_dispatch
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Checkout shared facade library
+        uses: actions/checkout@v4
+        with:
+          repository: Anime2Real/Chobits-Chii-CloudDeploy
+          path: Chobits-Chii-CloudDeploy
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+          cache: pip
+      - name: Install dependencies
+        run: |
+          pip install -e Chobits-Chii-CloudDeploy/tools/chii-facade-common
+          pip install -r requirements.txt pytest
+      - name: Run tests
+        run: python -m pytest tests/ -v

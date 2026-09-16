@@ -143,6 +143,29 @@ def test_ws_per_client_limit_by_identity(client, hold_engine):
         for ticket in tickets[:4]:
             _open(stack, client, params={"ticket": ticket})
         _expect_close(client, 4429, params={"ticket": tickets[4]})
+    # 超限拒绝 (4429) 不得消耗一次性票据：被拒的第 5 张票未被核销
+    assert "jti-id-4" not in server._used_tickets
+
+
+def test_ws_over_limit_rejected_ticket_still_usable(client, hold_engine):
+    # 4429 拒绝不烧票：槽位释放后同一张票可正常入场并被核销
+    tickets = [make_ticket(identity="acct:u1", jti="jti-save-%d" % i) for i in range(5)]
+    with ExitStack() as stack:
+        for ticket in tickets[:4]:
+            _open(stack, client, params={"ticket": ticket})
+        _expect_close(client, 4429, params={"ticket": tickets[4]})
+    # 4 个连接随 ExitStack 关闭、槽位释放；同一张第 5 票此刻应能准入
+    with client.websocket_connect("/v1/realtime", params={"ticket": tickets[4]}):
+        pass
+    assert "jti-save-4" in server._used_tickets  # accept 后才真正核销
+
+
+def test_ws_accept_consumes_ticket(client, hold_engine):
+    # 正常入场 (accept) 后票据被核销：同一张票二次使用按重放拒绝 (4401)
+    ticket = make_ticket(identity="acct:u1", jti="jti-consume")
+    with client.websocket_connect("/v1/realtime", params={"ticket": ticket}):
+        assert "jti-consume" in server._used_tickets
+    _expect_close(client, 4401, params={"ticket": ticket})
 
 
 def test_ws_distinct_identities_independent_quotas(client, hold_engine):

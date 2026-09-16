@@ -26,7 +26,7 @@ AUTH = {"Authorization": "Bearer " + API_KEY}
 
 
 def make_ticket(identity=None, exp=None, jti="jti-1", secret=None):
-    """按 server._ticket_consume 的验签格式铸造票据（默认新版 4 段）。"""
+    """按 server._ticket_verify 的验签格式铸造票据（默认新版 4 段）。"""
     secret = server.TICKET_SECRET if secret is None else secret
     exp = int(time.time()) + 60 if exp is None else exp
     idb64 = ""
@@ -42,12 +42,12 @@ def make_ticket(identity=None, exp=None, jti="jti-1", secret=None):
 @pytest.fixture(autouse=True)
 def reset_global_state():
     """每个测试隔离模块级全局状态（限流桶 / 票据核销集合 / WS 并发桶）。"""
-    server._hits.clear()
+    server._rate_limiter.clear()
     server._used_tickets.clear()
     server._ws_active.clear()
     server._ws_active_total = 0
     yield
-    server._hits.clear()
+    server._rate_limiter.clear()
     server._used_tickets.clear()
     server._ws_active.clear()
     server._ws_active_total = 0

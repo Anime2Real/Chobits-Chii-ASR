@@ -13,16 +13,22 @@
 
 ## 覆盖范围
 
-- `test_unit.py`：`_ticket_consume`（旧 3 段 / 新 4 段格式、签名错误、过期、
-  jti 一次性核销、idb64 身份提取）、`_getenv_int/_getenv_float` 容错、
+- `test_unit.py`：`_ticket_verify`/`_ticket_mark_used`（旧 3 段 / 新 4 段格式、
+  签名错误、过期、验签不核销、mark_used 后 jti 一次性、idb64 身份提取）、
+  `_getenv_int/_getenv_float` 容错、
   `_client_ip` XFF 末跳逻辑、`_authorized` 只认 Bearer、`_sanitize_filename`。
 - `test_backend_funasr.py`：start 帧校验（language 白名单 ja/zh/en/auto、ko
   与命令注入拒绝、sample_rate "abc" → error + 1002、None → 缺省 16000、
-  非 16000 拒绝）与引擎命令翻译（START / LANGUAGE:）。
+  非 16000 拒绝）与引擎命令翻译（START / LANGUAGE:）；WS 背压（引擎 connect
+  带 max_size=4MB、客户端单帧 >1MB → error + close 1009 且帧不进引擎、
+  引擎消息超限 PayloadTooBig → 客户端收到 error 帧）；
+  error 帧 code 字段（X-6 枚举契约钉死、各报错站点 code 值、qwen3 骨架
+  internal_error）。
 - `test_endpoints.py`：TestClient 端点级——/healthz 免鉴权、/v1/models 无 key
   401、批量转写引擎错误通用化（5xx → 502、4xx 通用文案、细节不外泄、model
   字段改写引擎注册名）、流式 WS 并发准入（同一身份第 5 个连接 4429、无身份
-  回退按 IP、断开释放槽位）。
+  回退按 IP、断开释放槽位、4429 超限拒绝不烧票且票据稍后可用、accept 后
+  正常核销同票二次使用 4401）。
 
 ## 状态隔离
 

@@ -176,4 +176,5 @@ CHII_ASR_BASE_URL=http://127.0.0.1:9881 CHII_ASR_API_KEY=<API_KEY> \
   python3 tools/client_example.py stream sample.wav ja
 ```
 
-注意在云安全组放行 TCP 9881；引擎端口 9001/10095 不要对外开放。
+注意：Caddy 架构（2026-09-12 起）下门面绑回环、公网只放行 TCP 443，安全组
+**不需要**放行 9881；引擎端口 9001/10095 不要对外开放。

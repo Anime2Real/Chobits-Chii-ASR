@@ -190,6 +190,43 @@ def test_start_frame_language_ko_error_frame():
     assert "ko" in client.sent[0]["message"]
 
 
+# --- 句级 is_final 语义：多句会话不下线 ------------------------------------------------
+
+def test_engine_is_final_message_does_not_end_session():
+    # FunASR vLLM 实时协议中 VAD 每切一句结果帧都带 is_final:true —— 它只是
+    # 该句定稿信号，不是会话结束；适配层只下推 final 帧，泵必须继续跑
+    client = FakeClient({"type": "start"})
+    sentences = []
+    end = run(backend._forward_engine_message(
+        client, json.dumps({"sentences": [{"text": "第一句"}], "is_final": True}),
+        sentences))
+    assert end is False
+    assert client.sent == [{"type": "final", "text": "第一句"}]
+
+
+def test_engine_stopped_event_ends_session():
+    client = FakeClient({"type": "start"})
+    end = run(backend._forward_engine_message(
+        client, json.dumps({"event": "stopped"}), []))
+    assert end is True
+
+
+def test_multi_sentence_session_stays_online(monkeypatch):
+    # P1 回归：一句带 is_final 后连接必须保持，第二句的 final 照常下发，
+    # 直到引擎 stopped 事件（客户端 stop 的确认）才结束会话
+    conn = ScriptEngineConn([
+        json.dumps({"sentences": [{"text": "你好"}], "is_final": True}),
+        json.dumps({"sentences": [{"text": "你好"}, {"text": "世界"}], "is_final": True}),
+        json.dumps({"event": "stopped"}),
+    ])
+    monkeypatch.setattr(backend.websockets, "connect", lambda url, **kw: conn)
+    client = HoldClient({"type": "start", "language": "ja"})
+    run(backend.handle_realtime(client, "ws://fake"))
+    finals = [f for f in client.sent if f.get("type") == "final"]
+    assert [f["text"] for f in finals] == ["你好", "世界"]
+    assert client.closed_with == 1000  # stopped 后正常关闭，非中途断连
+
+
 # --- WS 背压 ----------------------------------------------------------------------
 
 def test_engine_connect_inbound_max_size_capped(monkeypatch):

@@ -110,6 +110,11 @@ def _ticket_verify(ticket: str) -> tuple[bool, str | None, tuple[str, int] | Non
         return False, None, None
     if not jti or len(jti) > 64 or len(idb64) > 256:
         return False, None, None
+    # 签名形态前置校验：合法 sig 恒为 hexdigest()[:32]（32 位小写 hex）。
+    # 非 ASCII 或形态不符直接拒 —— hmac.compare_digest 对含非 ASCII 字符的 str
+    # 抛未捕获 TypeError，会把握手打成 500
+    if not sig.isascii() or not re.fullmatch(r"[0-9a-f]{32}", sig):
+        return False, None, None
     signed = f"asr-realtime.{exp}.{jti}" + (f".{idb64}" if idb64 else "")
     expected = hmac.new(TICKET_SECRET.encode(),
                         signed.encode(), hashlib.sha256).hexdigest()[:32]
@@ -314,14 +319,22 @@ async def realtime(ws: WebSocket):
     # 被拒连接的票据已被烧掉，换票必然失败
     bucket = f"id:{identity}" if identity else f"ip:{ip}"
     global _ws_active_total
-    if _ws_active_total >= WS_MAX_GLOBAL or _ws_active[bucket] >= WS_MAX_PER_CLIENT:
+    # .get() 而非 defaultdict[bucket]：直接取值会在拒绝路径上留下 0 值残留项
+    if _ws_active_total >= WS_MAX_GLOBAL or _ws_active.get(bucket, 0) >= WS_MAX_PER_CLIENT:
         await ws.close(code=4429)
         return
+    # accept 在计数自增之前执行：弱网握手途中断连时 starlette 的 accept 会抛异常
+    # ("Cannot call accept once disconnect message has been received")，此刻计数未动，
+    # 无泄漏；票据同样不核销（与 mark_used 放在 accept 后同一语义）
+    try:
+        await ws.accept()
+    except Exception:
+        return
+    # accept 成功后才占并发槽位并核销：任何路径计数配平（finally 必配平一次自增），
+    # 并发超限/验签失败/accept 失败的拒绝路径一律不计数不烧票。
+    # 剩余竞态窗口（验签→核销之间同 jti 一票多开可双双准入）见 _ticket_mark_used
     _ws_active[bucket] += 1
     _ws_active_total += 1
-    await ws.accept()
-    # accept 完成后才核销：并发超限/验签失败的拒绝路径都不烧票。
-    # 剩余竞态窗口（验签→核销之间同 jti 一票多开可双双准入）见 _ticket_mark_used
     if ticket_pending is not None:
         _ticket_mark_used(*ticket_pending)
     try:

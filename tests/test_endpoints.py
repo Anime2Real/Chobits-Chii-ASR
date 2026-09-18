@@ -2,6 +2,7 @@
 import asyncio
 import hashlib
 from contextlib import ExitStack
+from types import SimpleNamespace
 
 import httpx
 import pytest
@@ -152,6 +153,15 @@ def test_ws_no_auth_rejected_4401(client, hold_engine):
     _expect_close(client, 4401)
 
 
+def test_ws_non_ascii_ticket_sig_rejected_4401_not_500(client, hold_engine):
+    # 非 ASCII 签名不得触发握手 500（旧实现 compare_digest TypeError 透出栈）；
+    # 形态前置校验后按验签失败关闭 4401
+    ticket = make_ticket(identity="acct:u1")
+    parts = ticket.split(".")
+    parts[-1] = "签" * 16
+    _expect_close(client, 4401, params={"ticket": ".".join(parts)})
+
+
 def test_ws_per_client_limit_by_identity(client, hold_engine):
     # 同一票据身份第 5 个连接被拒（WS_MAX_PER_CLIENT=4）
     tickets = [make_ticket(identity="acct:u1", jti="jti-id-%d" % i) for i in range(5)]
@@ -209,3 +219,46 @@ def test_ws_slot_released_after_disconnect(client, hold_engine):
     with ExitStack() as stack:
         for _ in range(4):
             _open(stack, client, headers=AUTH)
+
+
+# --- 流式 WS：accept 失败路径（弱网握手途中断连） -------------------------------------
+
+class AcceptBoomWS:
+    """starlette WebSocket 替身：accept() 抛异常（模拟握手途中客户端已断连，
+    starlette 报 "Cannot call accept once disconnect message has been received"）。"""
+
+    def __init__(self, ticket):
+        self.client = SimpleNamespace(host="127.0.0.1")
+        self.headers = {}
+        self.query_params = {"ticket": ticket}
+        self.closed = []
+
+    async def accept(self):
+        raise RuntimeError(
+            "Cannot call accept once disconnect message has been received")
+
+    async def close(self, code=1000):
+        self.closed.append(code)
+
+
+def test_ws_accept_failure_does_not_leak_counter_or_burn_ticket():
+    # P0 回归：accept 抛异常时并发计数必须配平（旧实现自增在前 → 永久泄漏，
+    # 同身份泄漏 4 次后被永久 4429），且一次性票据不得被烧毁
+    ticket = make_ticket(identity="acct:u1", jti="jti-boom")
+    ws = AcceptBoomWS(ticket)
+    asyncio.run(server.realtime(ws))
+    assert server._ws_active_total == 0
+    assert dict(server._ws_active) == {}
+    assert "jti-boom" not in server._used_tickets
+    # 票未烧：验签仍可通过，且身份配额未被泄漏的计数占用
+    assert server._ticket_verify(ticket)[0] is True
+
+
+def test_ws_accept_failure_repeated_then_normal_accept_still_admitted():
+    # 同一身份连续 accept 失败（弱网重试）不得消耗并发配额，正常连接照常准入
+    tickets = [make_ticket(identity="acct:u1", jti="jti-rb-%d" % i) for i in range(3)]
+    for t in tickets:
+        asyncio.run(server.realtime(AcceptBoomWS(t)))
+    assert server._ws_active_total == 0
+    ok_identities = [server._ticket_verify(t)[0] for t in tickets]
+    assert ok_identities == [True, True, True]

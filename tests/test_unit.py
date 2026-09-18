@@ -40,6 +40,29 @@ def test_ticket_bad_signature_rejected():
     assert pending is None
 
 
+def test_ticket_non_ascii_sig_rejected_not_500():
+    # 非 ASCII 签名：旧实现 hmac.compare_digest 抛 TypeError → 握手 500；
+    # 现必须安静拒收（4401 由 realtime()  close code 表达）
+    ticket = make_ticket(identity="acct:u1")
+    parts = ticket.split(".")
+    parts[-1] = "签" * 16
+    assert not parts[-1].isascii()
+    ok, identity, pending = server._ticket_verify(".".join(parts))
+    assert ok is False
+    assert identity is None
+    assert pending is None
+
+
+def test_ticket_non_hex_ascii_sig_rejected():
+    # ASCII 但非 32 位小写 hex（错长度/含字母表外字符）同样前置拒收
+    ticket = make_ticket(identity="acct:u1")
+    parts = ticket.split(".")
+    parts[-1] = "z" * 32
+    assert server._ticket_verify(".".join(parts))[0] is False
+    parts[-1] = "a" * 31
+    assert server._ticket_verify(".".join(parts))[0] is False
+
+
 def test_ticket_wrong_secret_rejected():
     ok, _, _ = server._ticket_verify(make_ticket(secret="other-secret"))
     assert ok is False

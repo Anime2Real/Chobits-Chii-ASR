@@ -27,8 +27,13 @@
         {"event": "started"|"stopped"|"language_set"|"error", ...}   事件帧
         {"sentences": [{"text","start","end"}], "partial": "...",
          "is_final": bool, ...}                                       识别结果帧
-    注意 STOP 之后引擎不关闭连接 (可再次 START), 由本适配层在收到 stopped/is_final 后主动断开。
-"""
+    注意 STOP 之后引擎不关闭连接 (可再次 START), 由本适配层在收到 stopped 事件后主动断开。
+    句级 is_final 只是该句定稿的信号 (VAD 切句即带 is_final:true), 不是会话结束 ——
+    客户端一次聆听会话说多句话, 期望同一条连接内逐句收到 final, 仅 stopped/错误/客户端
+    stop/断连才结束连接。
+    统一协议的一条连接 = 一次聆听会话 (可含多句): start 后持续推音频, 每句话定型时
+    收到一条 final; 客户端发 stop 或断连即会话结束, 服务端随后关闭连接。"""
+
 
 import asyncio
 import json
@@ -116,7 +121,12 @@ async def _forward_engine_message(client, raw, sentences: list) -> bool:
     引擎每条消息都带全量 sentences 历史, sentences 参数按下标记录已下推进度
     (与引擎数组严格对齐, 含空文本占位), 只发新增的尾巴——按文本去重会同时造成
     "不同句级联重复"和"连续相同句被吞"两类错误。引擎偶尔会原地扩写最后一句
-    (boundary retry), 已下推的下标不重发, 该扩写会被跳过 (可接受的极端边角)。"""
+    (boundary retry), 已下推的下标不重发, 该扩写会被跳过 (可接受的极端边角)。
+
+    会话结束条件只有三: 引擎 error 事件 / stopped 事件 (STOP 的确认) /
+    上层因客户端 stop/断连/超时取消本泵。句级 is_final (VAD 切句定稿) 只用于
+    随 sentences 下推 final 帧, 绝不结束会话 —— 客户端一次会话说多句, 中途
+    每句都带 is_final:true, 把它当会话结束会让第一句之后全部丢失。"""
     try:
         data = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
@@ -142,7 +152,8 @@ async def _forward_engine_message(client, raw, sentences: list) -> bool:
         sentences.append(text or "")
         if text:
             await client.send_json({"type": "final", "text": text})
-    return bool(data.get("is_final"))
+    # 句级 is_final 不回传 True：见 docstring，它不是会话结束信号
+    return False
 
 
 async def handle_realtime(client, engine_url: str) -> None:
@@ -233,7 +244,8 @@ async def handle_realtime(client, engine_url: str) -> None:
                             return
 
             async def pump_out() -> None:
-                """引擎 → 客户端, 收到 stopped/is_final/error 即结束 (引擎不关连接, 主动断)。"""
+                """引擎 → 客户端, 收到 stopped/error 即结束 (引擎不关连接, 主动断);
+                句级 is_final 只下推 final 帧, 不结束会话 (多句会话中途每句都带)。"""
                 async for raw in engine:
                     if await _forward_engine_message(client, raw, sentences):
                         return
@@ -265,7 +277,7 @@ async def handle_realtime(client, engine_url: str) -> None:
             if pending:
                 await asyncio.gather(*pending, return_exceptions=True)
             # 泵带异常结束（如引擎消息超 ENGINE_MAX_MSG_BYTES 触发 PayloadTooBig）：
-            # 细节已落门面日志，客户端只给通用 error 帧再关（正常 is_final/stop 结束无此帧）
+            # 细节已落门面日志，客户端只给通用 error 帧再关（正常 stopped/stop 结束无此帧）
             if pump_failed and not client_gone:
                 try:
                     await client.send_json({"type": "error", "code": "engine_error",

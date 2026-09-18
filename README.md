@@ -42,6 +42,8 @@
 - **HTTP 批量转写**：Fun-ASR-Nano（`funasr-server`）与 Qwen3-ASR（`qwen-asr-serve` / `vllm serve`）都原生暴露 `POST /v1/audio/transcriptions`，门面只做透传——切换时只需改三个环境变量，批量转写客户端零改动。
 - **WS 流式**：门面定义了统一对外协议（`start`/音频帧/`stop` → `partial`/`final`），协议差异由 `tools/backend_funasr.py` / `tools/backend_qwen3.py` 吸收。注意 Qwen3 侧流式 shim 尚未实现（`backend_qwen3.py` 现为报错骨架，连接即收到明确报错并断开），切到 qwen3 后流式在 shim 落地前不可用；Qwen3-ASR 侧流式 shim 见 Roadmap。
 
+**会话语义（重要）**：一条 `/v1/realtime` 连接 = 一次聆听会话，可包含多句话。`start` 后持续推音频，每句话说定稿时服务端下推一条 `{"type":"final"}`（可能多条）；引擎句级 `is_final` 只是该句定稿的内部信号，不下发、也不结束连接。客户端发 `{"type":"stop"}`（或断连）即会话结束：服务端等引擎把最后的 final 吐完后主动关闭连接（close 1000）。客户端不应在收到第一条 final 后自行断连重开——换连接需要重新换票。
+
 出错时服务端下发 `{"type":"error","code":"<CODE>","message":"<中文兜底>"}` 帧后随即关闭连接。`code` 为稳定枚举（X-6 协议，与 LLM/Mascot 门面同一集合），**message 为兜底文案，客户端应按 code 本地化**：
 
 | code | 适用 |

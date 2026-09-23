@@ -4,6 +4,7 @@ server.py 在模块级读取 CHII_ASR_* 配置（未设置 CHII_ASR_API_KEY 会 
 故环境变量必须在 import 之前就绪。引擎依赖不启动：端点测试用 monkeypatch
 替换 server._engine（httpx.AsyncClient）与 backend.handle_realtime。
 """
+import asyncio
 import base64
 import hashlib
 import hmac
@@ -41,13 +42,21 @@ def make_ticket(identity=None, exp=None, jti="jti-1", secret=None):
 
 @pytest.fixture(autouse=True)
 def reset_global_state():
-    """每个测试隔离模块级全局状态（限流桶 / 票据核销集合 / WS 并发桶）。"""
+    """每个测试隔离模块级全局状态（限流桶 / 票据核销集合 / WS 并发桶 / 深检缓存）。
+
+    深检锁重建为未绑定事件循环的新锁：asyncio 原语首次使用时绑 loop，
+    跨 TestClient（各带独立 portal/loop）复用同一把锁会报
+    "bound to a different event loop"。"""
     server._rate_limiter.clear()
     server._used_tickets.clear()
     server._ws_active.clear()
     server._ws_active_total = 0
+    server._deep_probe.update({"at": 0.0, "ok": False, "engine": "not probed yet"})
+    server._deep_probe_lock = asyncio.Lock()
     yield
     server._rate_limiter.clear()
     server._used_tickets.clear()
     server._ws_active.clear()
     server._ws_active_total = 0
+    server._deep_probe.update({"at": 0.0, "ok": False, "engine": "not probed yet"})
+    server._deep_probe_lock = asyncio.Lock()

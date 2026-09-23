@@ -1,6 +1,8 @@
 """tools/server.py 端点级测试：TestClient + 内存假引擎（不触真实 :9001/:10095）。"""
 import asyncio
 import hashlib
+import threading
+import time
 from contextlib import ExitStack
 from types import SimpleNamespace
 
@@ -37,6 +39,143 @@ def test_models_with_key_200(client):
     assert resp.json()["data"][0]["id"] == "chii-asr"
 
 
+# --- /healthz/deep 深度健康检查 ------------------------------------------------
+
+def test_healthz_deep_no_key_401(client, monkeypatch):
+    # 深探测是真实转写（有引擎成本），与其余端点一样须带 key：无 key/错 key 都 401 且不触引擎
+    engine = FakeEngine(resp=FakeResp(200, b'{"text": ""}'))
+    monkeypatch.setattr(server, "_engine", engine)
+    assert client.get("/healthz/deep").status_code == 401
+    assert client.get("/healthz/deep",
+                      headers={"Authorization": "Bearer wrong"}).status_code == 401
+    assert engine.calls == []
+
+
+def test_healthz_deep_ok_200(client, monkeypatch):
+    engine = FakeEngine(resp=FakeResp(200, b'{"text": ""}'))  # 静音 → 空串属正常应答
+    monkeypatch.setattr(server, "_engine", engine)
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["ok"] is True
+    assert body["status"] == "ok"
+    assert body["backend"] == server.BACKEND  # 引擎标识字段
+    # 探测走与批量转写相同的引擎路径：同端点 + 引擎注册模型名 + 内置 wav
+    (call,) = engine.calls
+    assert call["url"] == "/v1/audio/transcriptions"
+    assert call["data"] == {"model": server.ENGINE_MODEL}
+    name, content, ctype = call["files"]["file"]
+    assert name == "healthz_probe.wav" and ctype == "audio/wav"
+    assert content == server.PROBE_WAV
+
+
+def test_healthz_deep_engine_5xx_503(client, monkeypatch):
+    engine = FakeEngine(resp=FakeResp(500, b"Internal: /app/engine/secret.py traceback"))
+    monkeypatch.setattr(server, "_engine", engine)
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 503
+    assert resp.json()["ok"] is False
+    assert "secret" not in resp.text  # 引擎内部细节不外泄
+
+
+def test_healthz_deep_engine_unreachable_503(client, monkeypatch):
+    engine = FakeEngine(exc=httpx.ConnectError("refused"))
+    monkeypatch.setattr(server, "_engine", engine)
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 503
+    assert resp.json()["engine"] == "unreachable: ConnectError"
+
+
+def test_healthz_deep_bad_response_503(client, monkeypatch):
+    # 引擎 200 但回的不是转写 JSON（变砖/代理错乱）：判 degraded 而非 200
+    engine = FakeEngine(resp=FakeResp(200, b"<html>proxy error</html>",
+                                      content_type="text/html"))
+    monkeypatch.setattr(server, "_engine", engine)
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 503
+    assert resp.json()["engine"] == "bad response"
+
+
+def test_healthz_deep_ttl_cache(client, monkeypatch):
+    engine = FakeEngine(resp=FakeResp(200, b'{"text": ""}'))
+    monkeypatch.setattr(server, "_engine", engine)
+    assert client.get("/healthz/deep", headers=AUTH).status_code == 200
+    assert client.get("/healthz/deep", headers=AUTH).status_code == 200
+    assert len(engine.calls) == 1  # TTL 内缓存生效，不重复烧引擎
+
+
+class _LockedLock:
+    """已上锁的锁替身：locked() 恒真（探测在途场景，端点走缓存/503 分支，不会再获取）。"""
+
+    def locked(self):
+        return True
+
+
+def test_healthz_deep_probe_in_progress_no_cache_503(client, monkeypatch):
+    # 服务刚启动（无缓存）时探测在途：快速 503 probe in progress，不排队等引擎
+    monkeypatch.setattr(server, "_deep_probe_lock", _LockedLock())
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 503
+    assert resp.json()["engine"] == "probe in progress"
+
+
+def test_healthz_deep_probe_in_progress_serves_stale_cache(client, monkeypatch):
+    # 已有缓存（哪怕已过期）时探测在途：直接吃缓存，不在探测窗口内对监控抖 503
+    monkeypatch.setattr(server, "_deep_probe_lock", _LockedLock())
+    server._deep_probe.update({"at": time.time() - 3600, "ok": True, "engine": "ok"})
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 200
+    assert resp.json()["ok"] is True
+
+
+def test_deep_probe_does_not_queue_behind_real_transcription(client, monkeypatch):
+    """引擎被一个真实批量转写占住（挂闸门）时：/healthz/deep 按自身短超时快速 503
+    （探测不排在真实请求后面等引擎），且闸门放行后真实转写照常 200。"""
+    gate = threading.Event()
+
+    class BusyEngine:
+        def __init__(self):
+            self.probe_calls = 0
+            self.transcription_calls = 0
+
+        async def post(self, url, data=None, files=None, timeout=None):
+            # 探测请求：引擎忙到探测超时（等价真实引擎排队超过探测超时）
+            if files and files.get("file", ("",))[0] == "healthz_probe.wav":
+                self.probe_calls += 1
+                await asyncio.sleep(float(timeout) if timeout else 30)
+                raise httpx.ReadTimeout("engine busy beyond probe timeout")
+            # 真实批量转写：挂闸门占住引擎
+            self.transcription_calls += 1
+            while not gate.is_set():
+                await asyncio.sleep(0.02)
+            return FakeResp(200, b'{"text": "real transcript"}')
+
+    engine = BusyEngine()
+    monkeypatch.setattr(server, "_engine", engine)
+    monkeypatch.setattr(server, "DEEP_PROBE_TIMEOUT", 0.3)
+
+    result = {}
+
+    def upload():
+        with TestClient(server.app) as c2:
+            result["resp"] = _upload(c2)
+
+    worker = threading.Thread(target=upload)
+    worker.start()
+    time.sleep(0.2)  # 让真实转写先占住引擎
+    t0 = time.monotonic()
+    resp = client.get("/healthz/deep", headers=AUTH)
+    elapsed = time.monotonic() - t0
+    assert resp.status_code == 503  # 引擎忙：探测超时 → degraded
+    assert elapsed < 5.0  # 快速失败，没有排在真实请求后面
+    assert engine.probe_calls == 1 and engine.transcription_calls == 1
+
+    gate.set()
+    worker.join(10)
+    assert result["resp"].status_code == 200  # 真实流量未被探测饿死/干扰
+    assert result["resp"].json()["text"] == "real transcript"
+
+
 # --- 批量转写：引擎错误通用化 --------------------------------------------------------
 
 class FakeResp:
@@ -53,7 +192,7 @@ class FakeEngine:
         self.exc = exc
         self.calls = []
 
-    async def post(self, url, data=None, files=None):
+    async def post(self, url, data=None, files=None, timeout=None):
         self.calls.append({"url": url, "data": data, "files": files})
         if self.exc is not None:
             raise self.exc

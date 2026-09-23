@@ -142,6 +142,15 @@ journalctl -u chobits-chii-asr -f
 > - 限流改按真实客户端 IP：对端为本机（Caddy/垫片）时采信 XFF 末跳
 >   （Caddy asr-ws 段与垫片透传均已配合覆盖/转发 XFF），直连不采信 XFF。
 
+> 2026-09-24 新增 `GET /healthz/deep` 深度健康检查（2026-09-24 门面 pytest 套件
+> 验证通过，真机引擎探测待部署后按 §6 命令补验）：用 0.5s 内置静音 WAV 走引擎批量
+> 转写 HTTP 路径发一次真实转写探测（不经 WS 票据，直连引擎层；探测不占用流式 GPU
+> 会话），结果缓存 `CHII_ASR_DEEP_PROBE_TTL` 秒（默认 30，防监控高频烧引擎），
+> 单次探测超时 `CHII_ASR_DEEP_PROBE_TIMEOUT`（默认 15s）——引擎忙/不可达/回包
+> 异常回 503（`{"ok":false,"status":"degraded",...}`），正常回 200（`ok:true` +
+> `backend` 字段）。须带 API key（与 TTS 门面 `/healthz/deep` 同语义）；浅探活仍用
+> 免鉴权 `GET /healthz`。
+
 ## 5. TLS（可选，公网强烈建议）
 
 ```bash
@@ -165,6 +174,9 @@ curl -X POST http://127.0.0.1:9881/v1/audio/transcriptions \
 # 流式识别
 CHII_ASR_BASE_URL=http://127.0.0.1:9881 CHII_ASR_API_KEY=<API_KEY> \
   python3 tools/client_example.py stream sample.wav ja
+
+# 深度健康检查（真实转写探测，须 API key；200=引擎可转写，503=引擎忙/不可达/变砖）
+curl -H "Authorization: Bearer <API_KEY>" http://127.0.0.1:9881/healthz/deep
 ```
 
 注意：Caddy 架构（2026-09-12 起）下门面绑回环、公网只放行 TCP 443，安全组

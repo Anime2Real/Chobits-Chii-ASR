@@ -7,11 +7,23 @@ HTTP 批量转写两侧均原生兼容 OpenAI 协议, 切换零改动; 流式协
 tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
 
 对外端点 (客户端 baseUrl 填 http(s)://<IP>:9881/v1):
-    GET  /healthz                  → 200 (免鉴权探活)
+    GET  /healthz                  → 200 (免鉴权浅探活)
+    GET  /healthz/deep             → 200/503 深度检查 (须 key, 真实转写探测, 见下方健康检查)
     GET  /v1/models                → 固定返回 chii-asr
     POST /v1/audio/transcriptions  → OpenAI 批量转写, 原样透传引擎 (multipart 文件上传)
     WS   /v1/realtime              → 统一流式协议 (start/音频帧/stop → partial/final,
                                      详见 tools/backend_funasr.py docstring)
+
+健康检查:
+  - GET /healthz        → 进程级浅探活 (免鉴权, 不触引擎, 不暴露指纹);
+  - GET /healthz/deep   → 深度检查: 用一小段内置静音 WAV 走与批量转写相同的引擎 HTTP
+    路径发一次真实转写探测 (不经 WS 票据, 直连引擎层), 能发现"进程活着但引擎变砖/
+    不可达"的状态; 探测超时 CHII_ASR_DEEP_PROBE_TIMEOUT 秒 (默认 15),
+    结果缓存 CHII_ASR_DEEP_PROBE_TTL 秒 (默认 30) 避免监控高频探测烧引擎;
+    引擎不可用/超时/回包异常 → 503, 正常 → 200 + ok/backend 字段。
+    与其余端点一样须带 API key (免鉴权的监控端点会形同虚设, 与 TTS 门面 /healthz/deep
+    同语义)。探测体积极小 (~16KB) 且与真实转写同路径同连接池, 引擎忙到探测超时时
+    由探测自身超时快速 503 (degraded), 不排队、不抢占真实流量 (并发取舍见端点注释)。
 
 配置走环境变量 (生产环境经 /etc/chobits-chii-asr.env 注入, 见 docs/deployment.md):
     CHII_ASR_API_KEY          客户端 Bearer 鉴权 key (必填, 未设置拒绝启动)
@@ -28,6 +40,8 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_WS_IDLE_SECONDS  流式空闲超时秒数 (无帧即断), 默认 60
     CHII_ASR_WS_MAX_AUDIO_BYTES 流式单会话音频总量上限 (字节), 默认 10MB
     CHII_ASR_WS_MAX_FRAME_BYTES 流式客户端单帧音频上限 (字节), 默认 1MB, 超限 error 帧 + close 1009
+    CHII_ASR_DEEP_PROBE_TTL    /healthz/deep 探测结果缓存秒数, 默认 30
+    CHII_ASR_DEEP_PROBE_TIMEOUT /healthz/deep 单次真实转写探测的超时秒数, 默认 15
     CHII_ASR_SSL_CERTFILE / CHII_ASR_SSL_KEYFILE  同时设置则以 HTTPS/WSS 启动
 
 用法:
@@ -42,10 +56,13 @@ import asyncio
 import base64
 import hashlib
 import hmac
+import io
+import json
 import os
 import re
 import sys
 import time
+import wave
 from collections import defaultdict
 
 from chii_facade_common import (
@@ -213,6 +230,91 @@ async def healthz():
     return {"status": "ok", "model": ASR_MODEL}
 
 
+# --- 深度健康检查 -----------------------------------------------------------
+# /healthz 是进程级浅探活；/healthz/deep 用一小段内置静音 WAV 走与批量转写相同的
+# 引擎 HTTP 路径发一次真实转写探测（不经 WS 票据，直连引擎层），能发现"进程活着但
+# 引擎变砖/不可达"的状态。结果缓存 DEEP_PROBE_TTL 秒，单飞锁防并发探测叠加。
+# 并发取舍（与 TTS 门面对齐思路但按 ASR 拓扑简化）：门面看不到引擎侧排队深度，
+# 不设独立信号量——探测走与真实转写完全相同的 httpx 连接池进引擎（批量路径，
+# 生产拓扑里跑 CPU，流式 GPU 会话不受影响），体积 ~16KB，最坏情况只是每 TTL 秒
+# 多一条微型请求；引擎忙到探测超时即按 degraded/503 上报由监控重试，不排队、
+# 不抢占真实流量。TTL 缓存过期瞬间并发探测：已有缓存吃缓存（过期也回，防监控
+# 在探测窗口内抖 503），无缓存（刚启动）快速 503 probe in progress。
+DEEP_PROBE_TTL = _getenv_float("DEEP_PROBE_TTL", 30.0)
+DEEP_PROBE_TIMEOUT = _getenv_float("DEEP_PROBE_TIMEOUT", 15.0)
+_deep_probe: dict = {"at": 0.0, "ok": False, "engine": "not probed yet"}
+_deep_probe_lock = asyncio.Lock()
+
+
+def _make_probe_wav(seconds: float = 0.5) -> bytes:
+    """内置深检探测音频：16kHz 16bit 单声道静音 WAV（标准库生成，确定性、无外部资源）。
+    静音是对引擎最温和的输入；探测判据是引擎完成转写管线并回良性 JSON（含 text 字段），
+    而非识别出具体文字——对静音返回空串 text 属于正常应答，强求出字会让监控必 503。"""
+    buf = io.BytesIO()
+    with wave.open(buf, "wb") as w:
+        w.setnchannels(1)
+        w.setsampwidth(2)
+        w.setframerate(16000)
+        w.writeframes(b"\x00\x00" * int(16000 * seconds))
+    return buf.getvalue()
+
+
+PROBE_WAV = _make_probe_wav()
+
+
+async def _probe_engine() -> dict:
+    """向引擎发一次真实转写探测, 返回 {"ok", "engine"} (engine 为状态简述, 脱敏)。"""
+    data = {"model": ENGINE_MODEL}
+    files = {"file": ("healthz_probe.wav", PROBE_WAV, "audio/wav")}
+    try:
+        resp = await _engine.post("/v1/audio/transcriptions", data=data, files=files,
+                                  timeout=DEEP_PROBE_TIMEOUT)
+    except httpx.HTTPError as exc:
+        return {"ok": False, "engine": f"unreachable: {exc.__class__.__name__}"}
+    if resp.status_code != 200:
+        return {"ok": False, "engine": f"http_{resp.status_code}"}
+    try:
+        result = json.loads(resp.content)
+    except ValueError:
+        return {"ok": False, "engine": "bad response"}
+    if not isinstance(result, dict) or "text" not in result:
+        return {"ok": False, "engine": "bad response"}
+    return {"ok": True, "engine": "ok"}
+
+
+def _deep_probe_response() -> JSONResponse:
+    ok = _deep_probe["ok"]
+    return JSONResponse(
+        status_code=200 if ok else 503,
+        content={"ok": ok, "status": "ok" if ok else "degraded",
+                 "backend": BACKEND, "engine": _deep_probe["engine"]})
+
+
+@app.get("/healthz/deep")
+async def healthz_deep(request: Request):
+    # 鉴权语义与其余端点一致（共享库 ApiKeyAuth，同 /v1/models）：免鉴权的监控端点形同虚设
+    if not _authorized(request):
+        return JSONResponse({"error": "unauthorized"}, status_code=401)
+    if time.time() - _deep_probe["at"] < DEEP_PROBE_TTL:
+        return _deep_probe_response()
+    # 单飞：上一次探测还在等引擎时不并发重入。检查与获取之间无 await，
+    # 在单事件循环内原子完成，不会检后被别人抢先
+    if _deep_probe_lock.locked():
+        if _deep_probe["at"] > 0:
+            return _deep_probe_response()  # 过期缓存也回，防监控在探测窗口内抖 503
+        return JSONResponse(status_code=503, content={
+            "ok": False, "status": "degraded", "backend": BACKEND,
+            "engine": "probe in progress"})
+    async with _deep_probe_lock:
+        if time.time() - _deep_probe["at"] < DEEP_PROBE_TTL:
+            return _deep_probe_response()  # 拿到锁后二次校验：等待期间已被刷新
+        result = await _probe_engine()
+        _deep_probe.update(result, at=time.time())
+        if not result["ok"]:
+            sys.stderr.write(f"[healthz] deep probe degraded: {result['engine']}\n")
+    return _deep_probe_response()
+
+
 @app.get("/v1/models")
 async def models(request: Request):
     if not _authorized(request):
@@ -358,7 +460,7 @@ def main() -> None:
     port = int(sys.argv[1]) if len(sys.argv) > 1 else _getenv_int("PORT", 9881)
     scheme = "https" if SSL_CERTFILE else "http"
     print(f"[asr] {scheme}://{BIND}:{port}  backend={BACKEND}"
-          f"  /v1/models /v1/audio/transcriptions /v1/realtime"
+          f"  /healthz /healthz/deep /v1/models /v1/audio/transcriptions /v1/realtime"
           f" → {ENGINE_HTTP_URL} / {ENGINE_WS_URL}", file=sys.stderr)
     uvicorn.run(app, host=BIND, port=port,
                 ssl_certfile=SSL_CERTFILE or None, ssl_keyfile=SSL_KEYFILE or None,

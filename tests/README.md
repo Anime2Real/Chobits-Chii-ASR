@@ -28,7 +28,10 @@
   error 帧 code 字段（X-6 枚举契约钉死、各报错站点 code 值、qwen3 骨架
   internal_error）。
 - `test_endpoints.py`：TestClient 端点级——/healthz 免鉴权、/v1/models 无 key
-  401、批量转写引擎错误通用化（5xx → 502、4xx 通用文案、细节不外泄、model
+  401、/healthz/deep 深检（无 key/错 key 401 不触引擎、探测走批量转写同引擎路径
+  同内置 wav、引擎 5xx/不可达/回包异常 → 503 且细节不外泄、TTL 缓存不重复烧引擎、
+  探测在途时无缓存快速 503/有缓存吃过期缓存、引擎被真实转写占住时探测按自身超时
+  快速 503 且真实转写不受影响）、批量转写引擎错误通用化（5xx → 502、4xx 通用文案、细节不外泄、model
   字段改写引擎注册名）、流式 WS 并发准入（同一身份第 5 个连接 4429、无身份
   回退按 IP、断开释放槽位、4429 超限拒绝不烧票且票据稍后可用、accept 后
   正常核销同票二次使用 4401、非 ASCII 签名票据 4401 而非 500）、accept 失败
@@ -36,6 +39,6 @@
 
 ## 状态隔离
 
-票据核销集合（`_used_tickets`）、限流桶（`_hits`）、WS 并发桶（`_ws_active`）
-是模块级全局状态，`conftest.py` 的 autouse fixture 在每个测试前后清空，
-测试可任意顺序重复运行。
+票据核销集合（`_used_tickets`）、限流桶（`_rate_limiter`）、WS 并发桶（`_ws_active`）、
+深检缓存（`_deep_probe`）与深检锁（`_deep_probe_lock`）是模块级全局状态，
+`conftest.py` 的 autouse fixture 在每个测试前后清空/重建，测试可任意顺序重复运行。

@@ -134,7 +134,11 @@ python3 tools/client_example.py stream sample.wav ja
 其他环境变量：`CHII_ASR_BIND`（门面监听地址，默认 `127.0.0.1`；不经 Caddy 直接对外须配下方 SSL env，否则非回环绑定拒绝启动）；
 `CHII_ASR_RATE_LIMIT`（转写与流式每 IP 每分钟限流次数，默认 60，0 关闭）；
 `CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_WS_URL` / `CHII_ASR_ENGINE_MODEL`（切换后端用）；
+`CHII_ASR_DEEP_PROBE_TTL` / `CHII_ASR_DEEP_PROBE_TIMEOUT`（`/healthz/deep` 探测结果缓存秒数 / 单次探测超时秒数，默认 30 / 15）；
 `CHII_ASR_SSL_CERTFILE` / `CHII_ASR_SSL_KEYFILE`（同时设置时以 HTTPS/WSS 启动）。
+
+健康检查：`GET /healthz` 为免鉴权浅探活（进程级，不触引擎、不暴露指纹）；
+`GET /healthz/deep` 为深度检查——用一小段内置静音音频走引擎批量转写路径做一次真实转写探测（TTL 缓存防高频烧引擎，探测不占用 WS 流式会话），引擎不可用/超时/回包异常回 503，正常回 200（含 `ok`/`backend` 字段）。与其他端点一样须带 API key（监控端点免鉴权会形同虚设，与 TTS 门面 `/healthz/deep` 同语义）。
 
 Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）下门面绑回环、公网只放行
 TCP 443，安全组**不需要**放行 9881；引擎端口 9001/10095 不要对外开放。

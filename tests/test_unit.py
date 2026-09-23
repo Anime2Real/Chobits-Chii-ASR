@@ -198,3 +198,16 @@ def test_sanitize_filename():
     assert server._sanitize_filename("a b/c;rm -rf.wav") == "c_rm_-rf.wav"
     assert server._sanitize_filename("") == "audio.bin"
     assert server._sanitize_filename("...") == "audio.bin"
+
+
+# --- 深检探测音频 ---------------------------------------------------------------
+
+def test_probe_wav_is_valid_short_16k_mono_wav():
+    # 内置探测音频必须是合法、极短的 16kHz 16bit 单声道 WAV（深检走引擎批量转写路径）
+    import io
+    import wave
+    with wave.open(io.BytesIO(server.PROBE_WAV), "rb") as w:
+        assert w.getnchannels() == 1
+        assert w.getsampwidth() == 2
+        assert w.getframerate() == 16000
+        assert 0 < w.getnframes() <= 16000  # ≤1s

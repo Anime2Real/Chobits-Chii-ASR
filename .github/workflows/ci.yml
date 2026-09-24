@@ -23,15 +23,15 @@ jobs:
       - name: Checkout shared facade library
         uses: actions/checkout@v4
         with:
-          repository: Anime2Real/Chobits-Chii-CloudDeploy
-          path: Chobits-Chii-CloudDeploy
+          repository: Anime2Real/Chobits-Chii-ServerDeploy
+          path: Chobits-Chii-ServerDeploy
       - uses: actions/setup-python@v5
         with:
           python-version: '3.12'
           cache: pip
       - name: Install dependencies
         run: |
-          pip install -e Chobits-Chii-CloudDeploy/tools/chii-facade-common
+          pip install -e Chobits-Chii-ServerDeploy/tools/chii-facade-common
           pip install -r requirements.txt pytest
       - name: Run tests
         run: python -m pytest tests/ -v

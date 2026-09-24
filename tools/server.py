@@ -76,7 +76,7 @@ from chii_facade_common import (
 )
 
 # 公共逻辑（env 容错解析 / XFF 真实 IP / key 校验 / 限流桶 / 错误通用化 / 响应头白名单）
-# 源自共享库 chii_facade_common（CloudDeploy 仓库 tools/chii-facade-common，兄弟目录 editable 安装）：
+# 源自共享库 chii_facade_common（ServerDeploy 仓库 tools/chii-facade-common，兄弟目录 editable 安装）：
 # 安全加固只改共享库一处，两门面同步生效，勿在本地重建副本。
 
 _env = EnvConfig("CHII_ASR_")

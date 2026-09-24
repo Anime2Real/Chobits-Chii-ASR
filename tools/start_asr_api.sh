@@ -8,14 +8,20 @@ set -e
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${1:-9881}"
 VENV="$REPO_ROOT/.venv"
-# 门面公共逻辑共享库（chii_facade_common）源在兄弟仓库 Chobits-Chii-CloudDeploy，
-# 生产 /home/ubuntu/Github/ 下三仓库互为兄弟目录
-COMMON_LIB="$REPO_ROOT/../Chobits-Chii-CloudDeploy/tools/chii-facade-common"
+# 门面公共逻辑共享库（chii_facade_common）源在兄弟仓库 Chobits-Chii-ServerDeploy，
+# 生产 /home/ubuntu/Github/ 下三仓库互为兄弟目录；兼容更名前的旧目录名 CloudDeploy
+COMMON_LIB=""
+for _sibling in "$REPO_ROOT/../Chobits-Chii-ServerDeploy" "$REPO_ROOT/../Chobits-Chii-CloudDeploy"; do
+    if [ -d "$_sibling/tools/chii-facade-common" ]; then
+        COMMON_LIB="$_sibling/tools/chii-facade-common"
+        break
+    fi
+done
 
 install_common_lib() {
     if [ ! -d "$COMMON_LIB" ]; then
-        echo "[错误] 未找到门面共享库: $COMMON_LIB" >&2
-        echo "       本门面依赖兄弟仓库的共享库，请先同级 clone Chobits-Chii-CloudDeploy 后重试，" >&2
+        echo "[错误] 未找到门面共享库: $REPO_ROOT/../Chobits-Chii-ServerDeploy/tools/chii-facade-common" >&2
+        echo "       本门面依赖兄弟仓库的共享库，请先同级 clone Chobits-Chii-ServerDeploy 后重试，" >&2
         echo "       或手动安装: pip install -e <chii-facade-common 路径>" >&2
         exit 1
     fi

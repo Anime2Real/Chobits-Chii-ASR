@@ -24,6 +24,7 @@ jobs:
         uses: actions/checkout@v4
         with:
           repository: Anime2Real/Chobits-Chii-ServerDeploy
+          ref: cloud   # main 为分支索引（无 tools/），共享库源在 cloud 分支
           path: Chobits-Chii-ServerDeploy
       - uses: actions/setup-python@v5
         with:

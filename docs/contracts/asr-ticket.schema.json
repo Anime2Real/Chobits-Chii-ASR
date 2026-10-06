@@ -1,0 +1,46 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Anime2Real/Chobits-Chii-ASR/blob/main/docs/contracts/asr-ticket.schema.json",
+  "title": "Chobits ASR 流式 WS 票据",
+  "description": "ASR 流式 WS 一次性票据：LLM 垫片签发（Chobits-Chii-LLM tools/provision/state.py 的 issueAsrTicket），ASR 门面验签（tools/server.py 的 _ticket_verify / _ticket_mark_used，验签前置、核销在 ws.accept() 之后）。新旧两版并存：新门面同时接受 3 段与 4 段票据；上线顺序先 ASR 门面后 LLM 垫片，回滚反之。双方通过共享密钥（CHII_ASR_API_KEY 派生）验签，改密钥需两侧同改。契约版本见同目录 VERSION 文件。",
+  "type": "string",
+  "oneOf": [
+    { "$ref": "#/$defs/ticket_v1" },
+    { "$ref": "#/$defs/ticket_v2" }
+  ],
+  "$defs": {
+    "ticket_v1": {
+      "title": "旧格式（3 段）",
+      "description": "<exp>.<jti>.<sig>。sig = HMAC(secret, \"asr-realtime.<exp>.<jti>\")。无身份字段，验签通过后按 IP 做流式并发计数。",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+    },
+    "ticket_v2": {
+      "title": "新格式（4 段）",
+      "description": "<exp>.<jti>.<idb64>.<sig>。idb64 = base64url(身份)；签名消息含 idb64，身份不可伪造。验签通过后按身份做流式并发计数（CHII_ASR_WS_MAX_PER_CLIENT，默认 4）。",
+      "type": "string",
+      "pattern": "^[0-9]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+\\.[A-Za-z0-9_-]+$"
+    },
+    "identity": {
+      "title": "票据身份（idb64 解码后的取值，LLM 侧 callerIdentity）",
+      "type": "string",
+      "pattern": "^(guest:.+|acct:.+)$",
+      "examples": [
+        "guest:<installId>",
+        "acct:<邮箱>"
+      ]
+    }
+  },
+  "x-segment-fields": {
+    "exp": "过期时间（Unix 秒）",
+    "jti": "票据唯一 ID（核销去重用）",
+    "idb64": "base64url 编码的身份（仅新格式）",
+    "sig": "HMAC 签名（base64url）"
+  },
+  "x-compat-matrix": {
+    "旧门面 + 旧垫片（签 3 段）": "✅",
+    "旧门面 + 新垫片（签 4 段）": "❌ 拒票（段数≠3）",
+    "新门面 + 旧垫片（签 3 段）": "✅（按 IP 计数）",
+    "新门面 + 新垫片（签 4 段）": "✅（按身份计数）"
+  }
+}

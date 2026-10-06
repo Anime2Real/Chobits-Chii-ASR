@@ -44,7 +44,7 @@
 
 **会话语义（重要）**：一条 `/v1/realtime` 连接 = 一次聆听会话，可包含多句话。`start` 后持续推音频，每句话说定稿时服务端下推一条 `{"type":"final"}`（可能多条）；引擎句级 `is_final` 只是该句定稿的内部信号，不下发、也不结束连接。客户端发 `{"type":"stop"}`（或断连）即会话结束：服务端等引擎把最后的 final 吐完后主动关闭连接（close 1000）。客户端不应在收到第一条 final 后自行断连重开——换连接需要重新换票。
 
-出错时服务端下发 `{"type":"error","code":"<CODE>","message":"<中文兜底>"}` 帧后随即关闭连接。`code` 为稳定枚举（X-6 协议，与 LLM/Mascot 门面同一集合），**message 为兜底文案，客户端应按 code 本地化**：
+出错时服务端下发 `{"type":"error","code":"<CODE>","message":"<中文兜底>"}` 帧后随即关闭连接。`code` 为稳定枚举（X-6 协议，与 LLM/Mascot 门面同一集合；**机器可读单一事实源**见 [`docs/contracts/`](docs/contracts/) 的 `errors.schema.json` 与 `VERSION`，ASR 票据格式见同目录 `asr-ticket.schema.json`），**message 为兜底文案，客户端应按 code 本地化**：
 
 | code | 适用 |
 |---|---|
@@ -93,13 +93,14 @@ Chobits-Chii-ASR/
 ├── data/                   # 评测数据说明 (音频不入库, 复用 Chobits-Chii-Voice)
 ├── examples/               # 示例说明
 ├── docs/
-│   └── deployment.md          # 服务器部署实录 (docker/systemd/TLS/验证)
+│   ├── deployment.md          # 服务器部署实录 (docker/systemd/TLS/验证)
+│   └── contracts/             # 跨服务契约机器可读单一事实源 (X-6 错误码/ASR 票据 schema + VERSION)
 └── outputs/                # 评测报告等产物 (不入库)
 ```
 
 ## 🚀 快速开始
 
-推理只需要引擎镜像与门面环境，无需训练数据。完整服务器部署（含 systemd 与 TLS）见 [docs/deployment.md](docs/deployment.md)。
+推理只需要引擎镜像与门面环境，无需训练数据。完整服务器部署（含 systemd 与 TLS）见 [docs/deployment.md](docs/deployment.md)。各仓库用到的国内镜像/加速源汇总见 [Chobits-Chii-TTS docs/mirrors.md](https://github.com/Anime2Real/Chobits-Chii-TTS/blob/main/docs/mirrors.md)。
 
 ```bash
 # 1. 构建并启动引擎容器 (模型权重首启自动经 ModelScope 下载)
@@ -116,7 +117,7 @@ export CHII_ASR_API_KEY=<随机密钥>   # 必填, 未设置拒绝启动
 bash tools/start_asr_api.sh 9881
 ```
 
-> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/main/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_asr_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库，或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。改动共享库后须重启门面生效。
+> 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/cloud/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_asr_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库**并检出 `cloud` 分支**——其 `main` 仅作分支索引、无 `tools/` 目录（`git clone -b cloud git@github.com:Anime2Real/Chobits-Chii-ServerDeploy.git ../Chobits-Chii-ServerDeploy`），或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。启动脚本已带前置检查：共享库缺失时打印上述指引并非零退出。改动共享库后须重启门面生效。
 
 调用（在服务器本机验证用 `http://127.0.0.1:9881/v1`；公网由 Caddy 反代终结 TLS——
 客户端经 443 由垫片转发到门面，见 [docs/deployment.md](docs/deployment.md)，`GET /v1/models` 固定返回 `chii-asr`）：

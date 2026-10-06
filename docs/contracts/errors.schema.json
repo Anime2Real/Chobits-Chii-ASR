@@ -1,0 +1,80 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/Anime2Real/Chobits-Chii-ASR/blob/main/docs/contracts/errors.schema.json",
+  "title": "Chobits X-6 服务端错误码枚举",
+  "description": "跨服务稳定错误码（X-6 协议，2026-09-17 起生效）。错误响应只加不改：code 为稳定枚举值，message/error 保留作兜底文案；客户端按 code 本地化，未知或缺失 code 必须回退原 message。契约版本见同目录 VERSION 文件。",
+  "type": "string",
+  "enum": [
+    "invalid_api_key",
+    "rate_limited",
+    "register_daily_limit",
+    "invalid_provision_key",
+    "invalid_install_id",
+    "issue_failed",
+    "quota_exceeded",
+    "image_too_large",
+    "image_not_supported",
+    "bad_request",
+    "internal_error",
+    "engine_error",
+    "engine_conn_failed",
+    "idle_timeout",
+    "protocol_error",
+    "frame_too_large",
+    "audio_limit_exceeded"
+  ],
+  "$defs": {
+    "llm_http_error_code": {
+      "title": "LLM HTTP 错误体 code（Chobits-Chii-LLM 垫片，定义见 tools/provision/errors.py）",
+      "description": "错误 JSON 顶层 \"code\" 字段。OpenAI 风格 chat 错误体为 {\"error\": {...}, \"code\"}；chobits 风格业务错误体为 {\"ok\": false, \"error\": ..., \"code\"}。既有 error/message 字段与文案一律不动（纯增量加键）。",
+      "type": "string",
+      "enum": [
+        "invalid_api_key",
+        "rate_limited",
+        "register_daily_limit",
+        "invalid_provision_key",
+        "invalid_install_id",
+        "issue_failed",
+        "quota_exceeded",
+        "image_too_large",
+        "image_not_supported",
+        "bad_request",
+        "internal_error"
+      ]
+    },
+    "asr_ws_error_code": {
+      "title": "ASR WS 错误帧 code（Chobits-Chii-ASR 门面，定义见 tools/backend_funasr.py 的 ERROR_CODES）",
+      "description": "WS error 帧 {\"type\":\"error\",\"code\":...,\"message\":...}，下发后随即关闭连接。WS close code 4401/4429/1011 不在此协议内。",
+      "type": "string",
+      "enum": [
+        "engine_error",
+        "engine_conn_failed",
+        "idle_timeout",
+        "protocol_error",
+        "frame_too_large",
+        "audio_limit_exceeded",
+        "internal_error"
+      ]
+    }
+  },
+  "x-code-meanings": {
+    "invalid_api_key": "401：Bearer key 无效/缺失（chat/models/memory/voice/asr-ticket）、邮箱验证码错误、设备凭证校验失败、session 失效",
+    "rate_limited": "429：通用限流（per-key / per-IP / 分钟 / 日频各桶）",
+    "register_daily_limit": "429：该 IP 今日注册次数达上限",
+    "invalid_provision_key": "401：X-Provision-Key 错误",
+    "invalid_install_id": "400：installId 非法",
+    "issue_failed": "502：令牌签发失败",
+    "quota_exceeded": "额度耗尽（上游 New API 错误透传，429 且文案命中额度关键词）",
+    "image_too_large": "413/400：图片超限（单张解码 5MB / 总量 6MB / 数量 / 请求体 8MB）",
+    "image_not_supported": "400：拒收图片（translate 等模型拒收、data URL 形式 / 格式 / 编码不支持）",
+    "bad_request": "其他 400 / 未知路径（404）",
+    "internal_error": "5xx / 未归类（LLM 侧含 SSE 中途中断的 error chunk；ASR 侧为其他未归类）",
+    "engine_error": "引擎识别/处理错误（含引擎侧 PayloadTooBig 等异常 surfaced）",
+    "engine_conn_failed": "连不上引擎（accept 超时/拒绝）",
+    "idle_timeout": "空闲超时关闭",
+    "protocol_error": "协议错误（首帧不是 start、start 参数非法等）",
+    "frame_too_large": "单帧超 CHII_ASR_WS_MAX_FRAME_BYTES",
+    "audio_limit_exceeded": "会话音频总量上限触顶（默认 10MB）"
+  },
+  "x-sync-rule": "新增取值必须三端同步：LLM tools/provision/errors.py + ASR tools/backend_funasr.py ERROR_CODES + Mascot packages/common/errors/server-error.ts 白名单（含三语文案），单侧添加视为协议破坏。"
+}

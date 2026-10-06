@@ -18,13 +18,23 @@ for _sibling in "$REPO_ROOT/../Chobits-Chii-ServerDeploy" "$REPO_ROOT/../Chobits
     fi
 done
 
-install_common_lib() {
-    if [ ! -d "$COMMON_LIB" ]; then
-        echo "[错误] 未找到门面共享库: $REPO_ROOT/../Chobits-Chii-ServerDeploy/tools/chii-facade-common" >&2
-        echo "       本门面依赖兄弟仓库的共享库，请先同级 clone Chobits-Chii-ServerDeploy 后重试，" >&2
-        echo "       或手动安装: pip install -e <chii-facade-common 路径>" >&2
-        exit 1
+# 前置检查：共享库缺失时先给出可操作的错误再退出，避免建完 venv 才失败
+if [ ! -d "$COMMON_LIB" ]; then
+    echo "[错误] 未找到门面共享库: $REPO_ROOT/../Chobits-Chii-ServerDeploy/tools/chii-facade-common" >&2
+    if [ -d "$REPO_ROOT/../Chobits-Chii-ServerDeploy" ] || [ -d "$REPO_ROOT/../Chobits-Chii-CloudDeploy" ]; then
+        echo "       兄弟仓库目录已存在但缺少 tools/chii-facade-common：ServerDeploy 的 main 分支仅作" >&2
+        echo "       索引（无 tools/ 目录），共享库源在 cloud 分支，请检出后重试:" >&2
+        echo "       git -C $REPO_ROOT/../Chobits-Chii-ServerDeploy switch cloud" >&2
+    else
+        echo "       本门面依赖兄弟仓库的共享库，请同级 clone 并检出 cloud 分支后重试:" >&2
+        echo "       git clone -b cloud git@github.com:Anime2Real/Chobits-Chii-ServerDeploy.git \\" >&2
+        echo "           $REPO_ROOT/../Chobits-Chii-ServerDeploy" >&2
     fi
+    echo "       或手动安装: pip install -e <chii-facade-common 路径>" >&2
+    exit 1
+fi
+
+install_common_lib() {
     "$VENV/bin/pip" install -e "$COMMON_LIB"
 }
 

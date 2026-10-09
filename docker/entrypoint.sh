@@ -9,7 +9,7 @@
 #   - 国内直连 huggingface.co 不可达时 -e HF_ENDPOINT=https://hf-mirror.com
 set -euo pipefail
 
-MODEL_ID="${MODEL_ID:-Qwen/Qwen3-ASR-0.6B}"
+MODEL_ID="${MODEL_ID:-Qwen/Qwen3-ASR-1.7B}"
 PORT="${PORT:-8000}"
 GPU_MEM_UTIL="${GPU_MEM_UTIL:-0.6}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"

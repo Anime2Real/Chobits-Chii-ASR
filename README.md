@@ -1,7 +1,7 @@
 <div align="center">
 	<h1>Chobits-Chii-ASR</h1>
 	<p><b>叽～</b> 小叽的语音识别服务</p>
-	<p>OpenAI 兼容的批量转写服务（流式待 WS shim）：<b>Qwen3-ASR-0.6B</b> 驱动（分支 <code>qwen3-asr-0.6b</code>）。</p>
+	<p>OpenAI 兼容的批量转写服务（流式待 WS shim）：<b>Qwen3-ASR-1.7B</b> 驱动（分支 <code>qwen3-asr-1.7b</code>）。</p>
 	<p>
 		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
 		<a href="https://github.com/Anime2Real/Chobits-Chii-ASR"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--ASR-181717?logo=github"></a>
@@ -13,11 +13,11 @@
 
 > 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-ASR) 点个 Star —— 你的支持能让更多人发现小叽！
 
-> 🔀 分支拓扑：本分支 `qwen3-asr-0.6b` 为 **Qwen3-ASR-0.6B** 的部署构建档案——引擎基于官方 `qwenllm/qwen3-asr` 镜像，`qwen-asr-serve` 单进程提供 OpenAI 兼容批量转写；**流式 `/v1/realtime` 暂不可用**（backend_qwen3 会明确报错，WS shim 见 Roadmap）。生产 T4 拓扑实录见 `fun-asr-nano-0.8b` 分支的 [docs/deployment.md](docs/deployment.md)。
+> 🔀 分支拓扑：本分支 `qwen3-asr-1.7b` 为 **Qwen3-ASR-1.7B** 的部署构建档案——引擎基于官方 `qwenllm/qwen3-asr` 镜像，`qwen-asr-serve` 单进程提供 OpenAI 兼容批量转写；**流式 `/v1/realtime` 暂不可用**（backend_qwen3 会明确报错，WS shim 见 Roadmap）。生产 T4 拓扑实录见 `fun-asr-nano-0.8b` 分支的 [docs/deployment.md](docs/deployment.md)。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 
-本项目在服务器部署 [Qwen3-ASR-0.6B](https://github.com/QwenLM/Qwen3-ASR)（Qwen 团队，基于 Qwen3-Omni 后训练，52 种语言与方言含日/英/中，Apache-2.0），经官方 `qwenllm/qwen3-asr` 镜像提供 OpenAI 兼容的批量转写接口；流式识别待 WS shim 落地（见 Roadmap）。Fun-ASR-Nano-2512 方案见 `fun-asr-nano-0.8b` 分支。评测数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集。
+本项目在服务器部署 [Qwen3-ASR-1.7B](https://github.com/QwenLM/Qwen3-ASR)（Qwen 团队，基于 Qwen3-Omni 后训练，52 种语言与方言含日/英/中，Apache-2.0），经官方 `qwenllm/qwen3-asr` 镜像提供 OpenAI 兼容的批量转写接口；流式识别待 WS shim 落地（见 Roadmap）。Fun-ASR-Nano-2512 方案见 `fun-asr-nano-0.8b` 分支。评测数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集。
 
 > ⚠️ 注意：原始动画音频的版权归其权利方所有。本项目仅供学习与研究使用，请勿用于商业用途。
 
@@ -127,7 +127,7 @@ python3 tools/client_example.py stream sample.wav ja
 
 其他环境变量：`CHII_ASR_BIND`（门面监听地址，默认 `127.0.0.1`；不经 Caddy 直接对外须配下方 SSL env，否则非回环绑定拒绝启动）；
 `CHII_ASR_RATE_LIMIT`（转写与流式每 IP 每分钟限流次数，默认 60，0 关闭）；
-`CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_MODEL`（本分支默认 qwen3 / http://127.0.0.1:9001 / Qwen/Qwen3-ASR-0.6B）；`CHII_ASR_ENGINE_WS_URL` 本分支无需设置（流式不可用）；
+`CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_MODEL`（本分支默认 qwen3 / http://127.0.0.1:9001 / Qwen/Qwen3-ASR-1.7B）；`CHII_ASR_ENGINE_WS_URL` 本分支无需设置（流式不可用）；
 `CHII_ASR_DEEP_PROBE_TTL` / `CHII_ASR_DEEP_PROBE_TIMEOUT`（`/healthz/deep` 探测结果缓存秒数 / 单次探测超时秒数，默认 30 / 15）；
 `CHII_ASR_SSL_CERTFILE` / `CHII_ASR_SSL_KEYFILE`（同时设置时以 HTTPS/WSS 启动）。
 

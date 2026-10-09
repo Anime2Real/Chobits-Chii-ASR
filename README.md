@@ -41,7 +41,7 @@
 
 - **HTTP 批量转写**：三分支门面代码一致，`CHII_ASR_BACKEND=funasr|qwen3` + 引擎地址环境变量切换，客户端零改动。
 - **WS 流式**：门面定义了统一对外协议（`start`/音频帧/`stop` → `partial`/`final`），协议差异由 `tools/backend_funasr.py` / `tools/backend_qwen3.py` 吸收。Qwen3 侧流式 shim 尚未实现（`backend_qwen3.py` 现为报错骨架，连接即收到明确报错并断开），本分支流式不可用；Fun-ASR-Nano 分支流式已生产验证。
-- 三个部署分支：`fun-asr-nano-0.8b`（Fun-ASR-Nano-2512，单容器双进程：批量 AutoModel/CPU + 流式 vLLM/GPU）、`qwen3-asr-0.6b`（本分支）、`qwen3-asr-1.7b`。门面 `tools/` 与 `tests/` 三分支完全一致，差异只在 `docker/` 与 `deploy/` 模板。
+- 三个部署分支：`fun-asr-nano-0.8b`（Fun-ASR-Nano-2512，单容器双进程：批量 AutoModel/CPU + 流式 vLLM/GPU）、`qwen3-asr-0.6b`、`qwen3-asr-1.7b`（本分支）。门面 `tools/` 与 `tests/` 三分支完全一致，差异只在 `docker/` 与 `deploy/` 模板。
 
 **会话语义（重要）**：一条 `/v1/realtime` 连接 = 一次聆听会话，可包含多句话。`start` 后持续推音频，每句话说定稿时服务端下推一条 `{"type":"final"}`（可能多条）；引擎句级 `is_final` 只是该句定稿的内部信号，不下发、也不结束连接。客户端发 `{"type":"stop"}`（或断连）即会话结束：服务端等引擎把最后的 final 吐完后主动关闭连接（close 1000）。客户端不应在收到第一条 final 后自行断连重开——换连接需要重新换票。
 

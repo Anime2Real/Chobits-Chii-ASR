@@ -1,11 +1,11 @@
 <div align="center">
 	<h1>Chobits-Chii-ASR</h1>
 	<p><b>叽～</b> 小叽的语音识别服务</p>
-	<p>OpenAI 兼容的批量转写与 WebSocket 流式识别服务：Fun-ASR-Nano-2512 驱动，并为 Qwen3-ASR 预留后端抽象。</p>
+	<p>OpenAI 兼容的批量转写与 WebSocket 流式识别门面：<b>Fun-ASR-Nano / Qwen3-ASR</b> 多引擎后端，按分支分发部署档案。</p>
 	<p>
 		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
 		<a href="https://github.com/Anime2Real/Chobits-Chii-ASR"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--ASR-181717?logo=github"></a>
-		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow"></a>
+		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii-Voice-yellow"></a>
 		<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="License: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
 		<img alt="Language: Japanese" src="https://img.shields.io/badge/Language-Japanese-green.svg">
 	</p>
@@ -13,34 +13,44 @@
 
 > 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-ASR) 点个 Star —— 你的支持能让更多人发现小叽！
 
-> ✅ 2026-09-12 生产上线：Fun-ASR-Nano 批量/流式全链路在 Tesla T4 服务器运行中（批量走 CPU、流式独占 GPU 的共存拓扑，见 [docs/deployment.md](docs/deployment.md)）。
+> 🔀 本分支（`main`）是**入口与导航分支**：只含引擎无关的门面代码、协议契约、评测工具与文档索引，**不含任何具体模型的部署内容**。部署引擎、构建镜像、调参适配请切换到对应部署分支。
 
-《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
-
-本项目在服务器部署 [Fun-ASR-Nano-2512](https://www.modelscope.cn/models/FunAudioLLM/Fun-ASR-Nano-2512)（阿里通义实验室，0.8B，支持中/英/日及中文方言），提供 OpenAI 兼容的批量转写与 WebSocket 流式识别接口，并为未来切换到 [Qwen3-ASR](https://github.com/QwenLM/Qwen3-ASR) 预留了后端抽象。评测数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集。
+《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。评测数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集。
 
 > ⚠️ 注意：原始动画音频的版权归其权利方所有。本项目仅供学习与研究使用，请勿用于商业用途。
 
-## 🏗️ 架构
+## 🔀 部署分支拓扑（选型看这里）
+
+| 分支 | 引擎 | 批量转写 | WS 流式 | 状态 | 适合场景 |
+|---|---|---|---|---|---|
+| [`fun-asr-nano-0.8b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/fun-asr-nano-0.8b) | Fun-ASR-Nano-2512（0.8B，中英日） | ✅（AutoModel，可跑 CPU） | ✅（生产验证，T4 质量拐点 ~4 路） | **生产在跑**（2026-09-12 上线） | 需要流式、角色名等专名识别、中英日 |
+| [`qwen3-asr-0.6b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-0.6b) | Qwen3-ASR-0.6B（52 语） | ✅（vLLM，RTF 0.02） | ❌（shim 未落地） | T4 实测通过（2026-10-09） | 纯批量、极致吞吐、多语覆盖 |
+| [`qwen3-asr-1.7b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-1.7b) | Qwen3-ASR-1.7B（52 语，开源 SOTA 档） | ✅（vLLM，RTF 0.09） | ❌（同上） | T4 实测通过（2026-10-09） | 纯批量、准确率优先 |
+
+**三个部署分支的门面代码（`tools/`）与测试（`tests/`）完全一致**，差异只在 `docker/`（引擎镜像）与 `deploy/`（env 模板）。切换方案 = 整分支切换 + 环境变量对齐，客户端零改动。
+
+```bash
+git clone git@github.com:Anime2Real/Chobits-Chii-ASR.git
+cd Chobits-Chii-ASR
+git checkout fun-asr-nano-0.8b   # 或 qwen3-asr-0.6b / qwen3-asr-1.7b
+# 各分支 README 有该方案的完整快速开始
+```
+
+各方案在不同硬件上的适配经验（T4 已实测、V100 预留）统一收录在 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)（三个分支同款，main 为原件）。
+
+## 🏗️ 架构（引擎无关）
 
 ```
 客户端 ──TLS + API Key──> Caddy :443 ──> 门面 tools/server.py (127.0.0.1:9881)
-                            │  POST /v1/audio/transcriptions ──> 引擎 HTTP :9001
-                            │  WS   /v1/realtime (统一协议) ──> 后端适配层 ──> 引擎 WS :10095
+                            │  POST /v1/audio/transcriptions ──> 引擎 HTTP
+                            │  WS   /v1/realtime (统一协议) ──> 后端适配层 ──> 引擎 WS
                             ▼
                       CHII_ASR_BACKEND=funasr|qwen3 选择 backend_*.py
-
-引擎 (Docker 容器, 单容器双进程):
-  funasr-server           OpenAI 兼容 HTTP 批量转写 (:9001, AutoModel)
-  funasr-realtime-server  流式 WebSocket 服务 (:10095, vLLM)
 ```
 
-与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与协议垫片，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。
+与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与协议垫片，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。门面把 `model=chii-asr` 改写为引擎注册名，客户端不感知后端。
 
-## 🔀 为切换 Qwen3-ASR 做的准备
-
-- **HTTP 批量转写**：Fun-ASR-Nano（`funasr-server`）与 Qwen3-ASR（`qwen-asr-serve` / `vllm serve`）都原生暴露 `POST /v1/audio/transcriptions`，门面只做透传——切换时只需改三个环境变量，批量转写客户端零改动。
-- **WS 流式**：门面定义了统一对外协议（`start`/音频帧/`stop` → `partial`/`final`），协议差异由 `tools/backend_funasr.py` / `tools/backend_qwen3.py` 吸收。注意 Qwen3 侧流式 shim 尚未实现（`backend_qwen3.py` 现为报错骨架，连接即收到明确报错并断开），切到 qwen3 后流式在 shim 落地前不可用；Qwen3-ASR 侧流式 shim 见 Roadmap。
+## 📼 门面协议（对客户端契约，后端无关）
 
 **会话语义（重要）**：一条 `/v1/realtime` 连接 = 一次聆听会话，可包含多句话。`start` 后持续推音频，每句话说定稿时服务端下推一条 `{"type":"final"}`（可能多条）；引擎句级 `is_final` 只是该句定稿的内部信号，不下发、也不结束连接。客户端发 `{"type":"stop"}`（或断连）即会话结束：服务端等引擎把最后的 final 吐完后主动关闭连接（close 1000）。客户端不应在收到第一条 final 后自行断连重开——换连接需要重新换票。
 
@@ -56,33 +66,15 @@
 | `audio_limit_exceeded` | 会话音频总量上限触顶（默认 10MB） |
 | `internal_error` | 其他未归类 |
 
-切换步骤（届时）：
-
-```bash
-# 1. 起 Qwen3-ASR 引擎 (官方镜像)
-docker run -d --name chobits-chii-asr-engine-qwen3 --gpus all \
-  -p 127.0.0.1:9001:8000 qwenllm/qwen3-asr:latest \
-  qwen-asr-serve Qwen/Qwen3-ASR-1.7B --gpu-memory-utilization 0.8 --port 8000
-
-# 2. /etc/chobits-chii-asr.env 改三行后重启门面:
-#    CHII_ASR_BACKEND=qwen3
-#    CHII_ASR_ENGINE_HTTP_URL=http://127.0.0.1:9001
-#    CHII_ASR_ENGINE_WS_URL=ws://127.0.0.1:<qwen3 ws shim 端口>
-```
-
-## 🗂 仓库结构
+## 🗂 仓库结构（main）
 
 ```
 Chobits-Chii-ASR/
-├── README.md               # 本文件
+├── README.md               # 本文件（分支导航 + 门面协议）
 ├── LICENSE                 # CC BY-NC-SA 4.0
 ├── .gitignore
 ├── requirements.txt        # 门面依赖 (含 WebSocket 流式网关所需包, 标准库不够)
-├── deploy/                 # 部署模板 (systemd unit + env 示例)
-├── docker/                 # 推理引擎镜像
-│   ├── Dockerfile             # Fun-ASR-Nano-2512 引擎 (funasr vLLM 服务栈 + T4 适配)
-│   └── entrypoint.sh          # 单容器双进程: HTTP :9001 + WS :10095
-├── tools/                  # 工具脚本
+├── tools/                  # 门面与工具（三分支一致）
 │   ├── server.py              # ASR 门面 (API Key 鉴权 + 限流 + OpenAI 垫片 + 流式 WS 网关)
 │   ├── backend_funasr.py      # Fun-ASR 后端适配 (Nano START/STOP 协议翻译)
 │   ├── backend_qwen3.py       # Qwen3-ASR 后端适配 (HTTP 现成; WS 留骨架, 见 Roadmap)
@@ -93,34 +85,28 @@ Chobits-Chii-ASR/
 ├── data/                   # 评测数据说明 (音频不入库, 复用 Chobits-Chii-Voice)
 ├── examples/               # 示例说明
 ├── docs/
-│   ├── deployment.md          # 服务器部署实录 (docker/systemd/TLS/验证)
+│   ├── hardware-adaptation.md # 硬件适配记录唯一真相源 (T4 实测/V100 预留, 三分支同款)
 │   └── contracts/             # 跨服务契约机器可读单一事实源 (X-6 错误码/ASR 票据 schema + VERSION)
 └── outputs/                # 评测报告等产物 (不入库)
+
+注：docker/（引擎镜像）与 deploy/（env 模板）只存在于部署分支。
 ```
 
-## 🚀 快速开始
-
-推理只需要引擎镜像与门面环境，无需训练数据。完整服务器部署（含 systemd 与 TLS）见 [docs/deployment.md](docs/deployment.md)。各仓库用到的国内镜像/加速源汇总见 [Chobits-Chii-TTS docs/mirrors.md](https://github.com/Anime2Real/Chobits-Chii-TTS/blob/main/docs/mirrors.md)。
+## 🚀 快速开始（任意部署分支通用）
 
 ```bash
-# 1. 构建并启动引擎容器 (模型权重首启自动经 ModelScope 下载)
-#    国内机构建慢/超时见 docs/deployment.md 的镜像源 build-args;
-#    引擎显存需求: 批量 AutoModel ~2.4GB + 流式 vLLM (默认预算 WS_GPU_MEM_UTIL=0.55×总显存)
-docker build -t chobits-chii-asr-engine docker/
-docker run -d --name chobits-chii-asr-engine --gpus all --restart unless-stopped \
-  -p 127.0.0.1:9001:9001 -p 127.0.0.1:10095:10095 \
-  -v $HOME/.cache/modelscope:/root/.cache/modelscope \
-  chobits-chii-asr-engine
+# 1. 切换到你的目标方案分支
+git checkout fun-asr-nano-0.8b    # 或 qwen3-asr-0.6b / qwen3-asr-1.7b
 
-# 2. 启动门面 (默认绑 127.0.0.1:9881, 首次自动建 .venv)
+# 2. 按该分支 README 构建并启动引擎容器（docker/ 目录）
+# 3. 启动门面 (默认绑 127.0.0.1:9881, 首次自动建 .venv)
 export CHII_ASR_API_KEY=<随机密钥>   # 必填, 未设置拒绝启动
 bash tools/start_asr_api.sh 9881
 ```
 
 > 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/cloud/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_asr_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库**并检出 `cloud` 分支**——其 `main` 仅作分支索引、无 `tools/` 目录（`git clone -b cloud git@github.com:Anime2Real/Chobits-Chii-ServerDeploy.git ../Chobits-Chii-ServerDeploy`），或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。启动脚本已带前置检查：共享库缺失时打印上述指引并非零退出。改动共享库后须重启门面生效。
 
-调用（在服务器本机验证用 `http://127.0.0.1:9881/v1`；公网由 Caddy 反代终结 TLS——
-客户端经 443 由垫片转发到门面，见 [docs/deployment.md](docs/deployment.md)，`GET /v1/models` 固定返回 `chii-asr`）：
+调用（在服务器本机验证用 `http://127.0.0.1:9881/v1`；公网由 Caddy 反代终结 TLS，`GET /v1/models` 固定返回 `chii-asr`）：
 
 ```bash
 # 批量转写 (OpenAI 兼容协议)
@@ -132,17 +118,18 @@ curl -X POST http://127.0.0.1:9881/v1/audio/transcriptions \
 python3 tools/client_example.py stream sample.wav ja
 ```
 
-其他环境变量：`CHII_ASR_BIND`（门面监听地址，默认 `127.0.0.1`；不经 Caddy 直接对外须配下方 SSL env，否则非回环绑定拒绝启动）；
+其他环境变量（含义三分支一致，默认值见各分支 `deploy/chobits-chii-asr.env.example`）：
+`CHII_ASR_BIND`（门面监听地址，默认 `127.0.0.1`）；
 `CHII_ASR_RATE_LIMIT`（转写与流式每 IP 每分钟限流次数，默认 60，0 关闭）；
-`CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_WS_URL` / `CHII_ASR_ENGINE_MODEL`（切换后端用）；
-`CHII_ASR_DEEP_PROBE_TTL` / `CHII_ASR_DEEP_PROBE_TIMEOUT`（`/healthz/deep` 探测结果缓存秒数 / 单次探测超时秒数，默认 30 / 15）；
+`CHII_ASR_BACKEND` / `CHII_ASR_ENGINE_HTTP_URL` / `CHII_ASR_ENGINE_WS_URL` / `CHII_ASR_ENGINE_MODEL`（后端与引擎地址）；
+`CHII_ASR_DEEP_PROBE_TTL` / `CHII_ASR_DEEP_PROBE_TIMEOUT`（`/healthz/deep` 探测缓存 / 超时秒数，默认 30 / 15）；
 `CHII_ASR_SSL_CERTFILE` / `CHII_ASR_SSL_KEYFILE`（同时设置时以 HTTPS/WSS 启动）。
 
-健康检查：`GET /healthz` 为免鉴权浅探活（进程级，不触引擎、不暴露指纹）；
-`GET /healthz/deep` 为深度检查——用一小段内置静音音频走引擎批量转写路径做一次真实转写探测（TTL 缓存防高频烧引擎，探测不占用 WS 流式会话），引擎不可用/超时/回包异常回 503，正常回 200（含 `ok`/`backend` 字段）。与其他端点一样须带 API key（监控端点免鉴权会形同虚设，与 TTS 门面 `/healthz/deep` 同语义）。
+健康检查：`GET /healthz` 为免鉴权浅探活；`GET /healthz/deep` 为深度检查——用一小段内置静音
+音频走引擎批量转写路径做一次真实转写探测（TTL 缓存防高频烧引擎），引擎不可用/超时/回包异常回 503。
+须带 API key（与 TTS 门面 `/healthz/deep` 同语义）。
 
-Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）下门面绑回环、公网只放行
-TCP 443，安全组**不需要**放行 9881；引擎端口 9001/10095 不要对外开放。
+安全约定：门面绑回环、公网只放行 TCP 443（Caddy 终结 TLS），安全组不需要放行 9881；引擎端口不要对外开放。
 对外提供服务须遵守 [CC BY-NC-SA 4.0](#-许可协议)（非商业）。
 
 ## 📊 评测
@@ -152,7 +139,7 @@ TCP 443，安全组**不需要**放行 9881；引擎端口 9001/10095 不要对�
 ```bash
 git clone https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice
 python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag funasr-nano
-# 切换 Qwen3-ASR 后用 --tag qwen3-asr 再跑一遍, 两份报告即可直接对比 CER
+# 切到其他部署分支后用 --tag qwen3-asr-06 / qwen3-asr-17 再跑, 多份报告即可直接对比 CER
 ```
 
 报告输出到 `outputs/eval_<tag>.csv`（整体 CER + 逐条明细，幂等可续跑）。
@@ -161,8 +148,8 @@ python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag 
 
 ## 🗺️ Roadmap
 
-- [x] 服务器首验：镜像构建、Fun-ASR-Nano 批量/流式全链路（Tesla T4 实测，含 fp32/显存调参记录，见 docs/deployment.md）
-- [x] 生产部署：引擎容器 + systemd 门面 + TLS 上线（2026-09-12，批量 CPU / 流式 GPU 共存拓扑）
+- [x] 服务器首验 + 生产部署：Fun-ASR-Nano 批量/流式全链路（Tesla T4，2026-09-12 上线，见 funasr 分支 docs/deployment.md）
+- [x] 多引擎部署档案分支化：funasr / qwen3-0.6b / qwen3-1.7b（2026-10-09 T4 实测通过，见 docs/hardware-adaptation.md）
 - [ ] Chobits-Chii-Voice 数据集上的日语 CER 基线（Fun-ASR-Nano vs Qwen3-ASR 对比）
 - [ ] Qwen3-ASR 流式 WS shim（引擎容器内基于 qwen-asr streaming SDK，复用 Nano 协议）
 - [ ] 日语识别热词支持（Fun-ASR-Nano 原生 hotwords，如角色名「秀樹」「ちぃ」）

@@ -1,6 +1,8 @@
 # Chobits-Chii-ASR 部署实录
 
-> 本文按家族惯例记录服务器部署全过程。
+> 本文按家族惯例记录服务器部署全过程（镜像构建 / 容器 / 门面 / systemd / TLS / 验证）。
+> **硬件适配、踩坑与调参经验已统一收录到 [docs/hardware-adaptation.md](hardware-adaptation.md)**
+> （三个分支同款，T4 已实测、V100 预留），本文不再重复。
 
 ## 实测环境
 
@@ -27,36 +29,8 @@
 
 ## T4（及无 bf16 的老卡）适配要点
 
-首验中踩过的坑，均已固化进 `docker/` 与 `tools/` 代码：
-
-1. **funasr 1.4.x 服务栈基于 vLLM**：流式 `funasr-realtime-server` 硬依赖（无回退）；
-   批量 `funasr-server` 失败回退 AutoModel。镜像需显式装 `vllm fastapi uvicorn python-multipart`
-   （后三个 funasr 未声明为依赖）。
-2. **dtype 只能 fp32**：T4（sm75）无 bf16 单元，vLLM 直接拒绝；funasr 又把 fp16 静默映射成
-   bf16（`inference_vllm._resolve_vllm_dtype`），官方注释明确无 bf16 的卡用 fp32。权重显存因此翻倍。
-3. **triton 需要 C 编译器**：vLLM 在 Turing 上 JIT 编译 ieee 精度 kernel，runtime 镜像无 gcc 必崩
-   （`Failed to find C compiler`），镜像已装 gcc。
-4. **批量侧 vLLM 尝试必须禁用**：`funasr._server_app` 硬编码 bf16 + 0.5 显存配比，T4 上必失败
-   且每次失败残留数 GB 孤儿显存。镜像内补丁加 `FUNASR_SERVER_NO_VLLM` 开关，entrypoint 默认置 1
-   （走 AutoModel 回退）；bf16 卡可 `-e FUNASR_SERVER_NO_VLLM=` 恢复。
-5. **显存配比**：vLLM 的 `gpu_memory_utilization` 预算**含其他进程占用**。0.25/0.35 实测 KV cache
-   不足（fp32 下 2048 长度需 ~0.88GiB），`WS_GPU_MEM_UTIL=0.55` 通过。
-6. **funasr-server 参数**：`--model` 只接受别名（fun-asr-nano 等），模型 ID 要走 `--model-path`；
-   此时引擎注册名为 `custom`，门面透传批量转写时把 `model` 改写为 `CHII_ASR_ENGINE_MODEL`（默认 custom）。
-7. **WS 引擎协议是纯文本命令**（非 JSON）：`START` / `STOP` / `LANGUAGE:<提示语>` / `HOTWORDS:a,b`；
-   音频必须 16kHz PCM16；STOP 后引擎不关连接，回 `{"event":"stopped"}` 与 `is_final` 结果帧，
-   由 `tools/backend_funasr.py` 适配并主动断流。语言提示语用「日本語」而非「日语」。
-8. **构建网络**（国内机器）：PyPI/GitHub 直连慢或超时。构建用
-   `--build-arg PIP_INDEX_URL/PIP_TRUSTED_HOST`（PyPI 镜像）与 `--build-arg APT_MIRROR`（apt 镜像）；
-   流式服务直接用 pip 包自带的 `funasr-realtime-server`，不再从 GitHub 拉脚本。
-9. **启动顺序竞争**：vLLM 按**启动那一刻的空闲显存**配比预算（`util × 总容量 ≤ 当前空闲`，
-   否则拒绝启动）。两服务并发启动会互相看不见对方而超发，把后加载方挤到 OOM——entrypoint
-   已改为批量先就绪（HTTP 200 探测）再起流式。
-10. **小卡共存拓扑**：T4 16GB + TTS 3.7GB 常驻时，批量 AutoModel(GPU ~2.4GB) + 流式 vLLM(fp32)
-    静态即占满，推理工作显存为 0（实测批量/流式双双 OOM）。解法：`HTTP_DEVICE=cpu` 批量上 CPU
-    （8 核实测 4.2s 音频约 2.5s），流式独占 GPU（util 0.40），留 ~3GB 工作余量。
-11. **TLS 私钥属主**：门面以 `User=ubuntu` 运行，`/etc/chobits-chii-asr.key` 必须
-    `chown ubuntu:ubuntu`（openssl 以 sudo 生成默认 root:root 600，uvicorn 读不了直接起不来）。
+> 已迁至 [docs/hardware-adaptation.md](hardware-adaptation.md)（T4 节，按引擎分小节；
+> 三个分支同款，避免双份漂移）。此处只留部署流程。
 
 ## 1. 构建引擎镜像
 
@@ -81,7 +55,7 @@ docker run -d --name chobits-chii-asr-engine \
   chobits-chii-asr-engine
 
 # 本机 (T4 16GB + TTS 共卡) 生产实际使用:
-#   增加 -e HTTP_DEVICE=cpu -e WS_GPU_MEM_UTIL=0.40   (理由见适配要点 9/10)
+#   增加 -e HTTP_DEVICE=cpu -e WS_GPU_MEM_UTIL=0.40   (理由见 docs/hardware-adaptation.md T4 节)
 
 docker logs -f chobits-chii-asr-engine   # 等 "Uvicorn running on :9001" 与 "Server on ws://0.0.0.0:10095"
 ```

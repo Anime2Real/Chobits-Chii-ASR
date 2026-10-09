@@ -15,7 +15,7 @@
 
 > ✅ 2026-09-12 生产上线：Fun-ASR-Nano 批量/流式全链路在 Tesla T4 服务器运行中（批量走 CPU、流式独占 GPU 的共存拓扑，见 [docs/deployment.md](docs/deployment.md)）。
 >
-> 🔀 分支拓扑：本分支 `fun-asr-nano-0.8b` 为 **Fun-ASR-Nano-0.8B** 的部署构建档案；`qwen3-asr-0.6b` / `qwen3-asr-1.7b` 分支为 Qwen3-ASR 对应档案（门面代码三分支一致，差异只在 `docker/` 与 `deploy/` 模板）。
+> 🔀 分支拓扑：本分支 `fun-asr-nano-0.8b` 为 **Fun-ASR-Nano-0.8B** 的部署构建档案；`qwen3-asr-0.6b` / `qwen3-asr-1.7b` 分支为 Qwen3-ASR 对应档案（门面代码三分支一致，差异只在 `docker/` 与 `deploy/` 模板）。Qwen3-ASR 引擎的硬件适配记录（T4 实测、V100 预留）见 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)（三个分支同款）；本分支（Fun-ASR-Nano）的 T4 适配实录在 [docs/deployment.md](docs/deployment.md)。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 

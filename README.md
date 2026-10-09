@@ -108,7 +108,7 @@ export CHII_ASR_API_KEY=<随机密钥>   # 必填, 未设置拒绝启动
 bash tools/start_asr_api.sh 9881
 ```
 
-> 引擎显存与 T4 适配（2026-10-09 实测）：vLLM 单进程，`GPU_MEM_UTIL=0.6`、`MAX_MODEL_LEN=32768`（默认 65536 的 KV 预算 ~7GB 在 T4 装不下）、`ENFORCE_EAGER=1`（CUDA graph 捕获期 OOM，entrypoint 已内置这三项默认值）。驱动 525（CUDA 12.0）低于镜像声明的 12.8，需 `NVIDIA_DISABLE_REQUIRE=1`；sm75（T4）上 flashinfer attention 后端启动卡死，需 `VLLM_ATTENTION_BACKEND=TRITON_ATTN`。权重首启经 HF 下载，国内配 `HF_ENDPOINT` 镜像。
+> 引擎显存与 T4 适配（2026-10-09 实测）：vLLM 单进程，`GPU_MEM_UTIL=0.6`、`MAX_MODEL_LEN=32768`（默认 65536 的 KV 预算 ~7GB 在 T4 装不下）、`ENFORCE_EAGER=1`（CUDA graph 捕获期 OOM，entrypoint 已内置这三项默认值）。驱动 525（CUDA 12.0）低于镜像声明的 12.8，需 `NVIDIA_DISABLE_REQUIRE=1`；sm75（T4）上 flashinfer attention 后端启动卡死，需 `VLLM_ATTENTION_BACKEND=TRITON_ATTN`。权重首启经 HF 下载，国内配 `HF_ENDPOINT` 镜像。完整踩坑记录与后续硬件适配（V100 预留）见 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)。
 
 > 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/cloud/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_asr_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库**并检出 `cloud` 分支**——其 `main` 仅作分支索引、无 `tools/` 目录（`git clone -b cloud git@github.com:Anime2Real/Chobits-Chii-ServerDeploy.git ../Chobits-Chii-ServerDeploy`），或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。启动脚本已带前置检查：共享库缺失时打印上述指引并非零退出。改动共享库后须重启门面生效。
 

@@ -1,5 +1,7 @@
 # Chobits-Chii-ASR 部署实录
 
+> ⚠️ 本分支 `qwen3-asr-0.6b` 说明：本文是 **fun-asr-nano-0.8b 分支**（Fun-ASR-Nano 双进程方案）的部署流程实录（构建 / 容器 / systemd / TLS / 验证），供对照参考；Qwen3-ASR 引擎的构建与运行见本分支 README「快速开始」（`docker/` 与 `deploy/chobits-chii-asr.env.example` 已按 qwen3 单进程方案改写）。
+
 > 本文按家族惯例记录服务器部署全过程（镜像构建 / 容器 / 门面 / systemd / TLS / 验证）。
 > **硬件适配、踩坑与调参经验已统一收录到 [docs/hardware-adaptation.md](hardware-adaptation.md)**
 > （三个分支同款，T4 已实测、V100 预留），本文不再重复。

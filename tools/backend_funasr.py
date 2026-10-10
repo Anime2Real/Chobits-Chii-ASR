@@ -190,7 +190,8 @@ async def handle_realtime(client, engine_url: str) -> None:
         await client.close(code=1002)
         return
     try:
-        async with websockets.connect(engine_url, max_size=ENGINE_MAX_MSG_BYTES) as engine:
+        async with websockets.connect(engine_url, max_size=ENGINE_MAX_MSG_BYTES,
+                                      proxy=None) as engine:
             for cmd in commands:
                 await engine.send(cmd)
             stopped = False

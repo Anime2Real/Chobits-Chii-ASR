@@ -15,7 +15,7 @@
 
 > ✅ 2026-09-12 生产上线：Fun-ASR-Nano 批量/流式全链路在 Tesla T4 服务器运行中（批量走 CPU、流式独占 GPU 的共存拓扑，见 [docs/deployment.md](docs/deployment.md)）。
 >
-> 🔀 分支拓扑：本分支 `fun-asr-nano-0.8b` 为 **Fun-ASR-Nano-0.8B** 的部署构建档案；[`qwen3-asr-0.6b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-0.6b) / [`qwen3-asr-1.7b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-1.7b) 分支为 Qwen3-ASR 对应档案（门面代码三分支一致，差异只在 `docker/` 与 `deploy/` 模板）。选型对比见 [`main`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/main) 的部署分支拓扑表；引擎硬件适配记录（T4 实测、V100 预留）统一收录在 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)（三个分支同款）；本分支的 T4 部署实录在 [docs/deployment.md](docs/deployment.md)。
+> 🌿 分支拓扑：本分支 `fun-asr-nano-0.8b` 为 **Fun-ASR-Nano-0.8B** 的部署构建档案；[`qwen3-asr-0.6b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-0.6b) / [`qwen3-asr-1.7b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-1.7b) 分支为 Qwen3-ASR 对应档案（门面代码三分支一致，差异只在 `docker/` 与 `deploy/` 模板）。选型对比见 [`main`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/main) 的部署分支拓扑表；引擎硬件适配记录（T4 实测、V100 预留）统一收录在 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)（三个分支同款）；本分支的 T4 部署实录在 [docs/deployment.md](docs/deployment.md)。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 
@@ -142,7 +142,7 @@ Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）�
 TCP 443，安全组**不需要**放行 9881；引擎端口 9001/10095 不要对外开放。
 对外提供服务须遵守 [CC BY-NC-SA 4.0](#-许可协议)（非商业）。
 
-## 📊 评测
+## 🎯 评测
 
 用 Chobits-Chii-Voice 数据集（487 条小叽日语台词，人工校对文本）测字错率：
 

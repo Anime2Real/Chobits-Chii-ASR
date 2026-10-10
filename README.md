@@ -13,11 +13,13 @@
 
 > 💖 如果这个项目对你有帮助，欢迎在 [GitHub](https://github.com/Anime2Real/Chobits-Chii-ASR) 点个 Star —— 你的支持能让更多人发现小叽！
 
-> 🔀 分支拓扑：本分支 `qwen3-asr-0.6b` 为 **Qwen3-ASR-0.6B** 的部署构建档案——引擎基于官方 `qwenllm/qwen3-asr` 镜像，`qwen-asr-serve` 单进程提供 OpenAI 兼容批量转写；**流式 `/v1/realtime` 暂不可用**（backend_qwen3 会明确报错，WS shim 见 Roadmap）。生产 T4 拓扑实录见 `fun-asr-nano-0.8b` 分支的 [docs/deployment.md](docs/deployment.md)。
+> ✅ 2026-10-09 T4 实测通过：批量转写 RTF 0.02（vLLM 单进程），适配踩坑与调参记录见 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)。
+>
+> 🔀 分支拓扑：本分支 `qwen3-asr-0.6b` 为 **Qwen3-ASR-0.6B** 的部署构建档案——引擎基于官方 `qwenllm/qwen3-asr` 镜像，`qwen-asr-serve` 单进程提供 OpenAI 兼容批量转写；**流式 `/v1/realtime` 暂不可用**（backend_qwen3 会明确报错，WS shim 见 Roadmap）。生产在跑的 Fun-ASR-Nano 方案见 [`fun-asr-nano-0.8b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/fun-asr-nano-0.8b) 分支（T4 拓扑实录见该分支 [docs/deployment.md](https://github.com/Anime2Real/Chobits-Chii-ASR/blob/fun-asr-nano-0.8b/docs/deployment.md)）；选型对比见 [`main`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/main) 的部署分支拓扑表。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 
-本项目在服务器部署 [Qwen3-ASR-0.6B](https://github.com/QwenLM/Qwen3-ASR)（Qwen 团队，基于 Qwen3-Omni 后训练，52 种语言与方言含日/英/中，Apache-2.0），经官方 `qwenllm/qwen3-asr` 镜像提供 OpenAI 兼容的批量转写接口；流式识别待 WS shim 落地（见 Roadmap）。Fun-ASR-Nano-2512 方案见 `fun-asr-nano-0.8b` 分支。评测数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集。
+本项目在服务器部署 [Qwen3-ASR-0.6B](https://github.com/QwenLM/Qwen3-ASR)（Qwen 团队，基于 Qwen3-Omni 后训练，52 种语言与方言含日/英/中，Apache-2.0），经官方 `qwenllm/qwen3-asr` 镜像提供 OpenAI 兼容的批量转写接口；流式识别待 WS shim 落地（见 Roadmap）。Fun-ASR-Nano-2512 方案见 [`fun-asr-nano-0.8b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/fun-asr-nano-0.8b) 分支。评测数据来自 [Chobits-Chii-Voice](https://github.com/Anime2Real/Chobits-Chii-Voice) 数据集。
 
 > ⚠️ 注意：原始动画音频的版权归其权利方所有。本项目仅供学习与研究使用，请勿用于商业用途。
 
@@ -26,7 +28,7 @@
 ```
 客户端 ──TLS + API Key──> Caddy :443 ──> 门面 tools/server.py (127.0.0.1:9881)
                             │  POST /v1/audio/transcriptions ──> 引擎 HTTP :9001
-                            │  WS   /v1/realtime (统一协议) ──> 后端适配层 ──> 引擎 WS :10095
+                            │  WS   /v1/realtime (统一协议) ──> 后端适配层 (shim 未落地, 连接即明确报错)
                             ▼
                       CHII_ASR_BACKEND=funasr|qwen3 选择 backend_*.py
 
@@ -41,7 +43,7 @@
 
 - **HTTP 批量转写**：三分支门面代码一致，`CHII_ASR_BACKEND=funasr|qwen3` + 引擎地址环境变量切换，客户端零改动。
 - **WS 流式**：门面定义了统一对外协议（`start`/音频帧/`stop` → `partial`/`final`），协议差异由 `tools/backend_funasr.py` / `tools/backend_qwen3.py` 吸收。Qwen3 侧流式 shim 尚未实现（`backend_qwen3.py` 现为报错骨架，连接即收到明确报错并断开），本分支流式不可用；Fun-ASR-Nano 分支流式已生产验证。
-- 三个部署分支：`fun-asr-nano-0.8b`（Fun-ASR-Nano-2512，单容器双进程：批量 AutoModel/CPU + 流式 vLLM/GPU）、`qwen3-asr-0.6b`（本分支）、`qwen3-asr-1.7b`。门面 `tools/` 与 `tests/` 三分支完全一致，差异只在 `docker/` 与 `deploy/` 模板。
+- 三个部署分支：[`fun-asr-nano-0.8b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/fun-asr-nano-0.8b)（Fun-ASR-Nano-2512，单容器双进程：批量 AutoModel/CPU + 流式 vLLM/GPU）、`qwen3-asr-0.6b`（本分支）、[`qwen3-asr-1.7b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-1.7b)。门面 `tools/` 与 `tests/` 三分支完全一致，差异只在 `docker/` 与 `deploy/` 模板。
 
 **会话语义（重要）**：一条 `/v1/realtime` 连接 = 一次聆听会话，可包含多句话。`start` 后持续推音频，每句话说定稿时服务端下推一条 `{"type":"final"}`（可能多条）；引擎句级 `is_final` 只是该句定稿的内部信号，不下发、也不结束连接。客户端发 `{"type":"stop"}`（或断连）即会话结束：服务端等引擎把最后的 final 吐完后主动关闭连接（close 1000）。客户端不应在收到第一条 final 后自行断连重开——换连接需要重新换票。
 
@@ -57,7 +59,7 @@
 | `audio_limit_exceeded` | 会话音频总量上限触顶（默认 10MB） |
 | `internal_error` | 其他未归类 |
 
-反向切换（回 Fun-ASR-Nano）：整分支切到 `fun-asr-nano-0.8b` 部署，门面 `CHII_ASR_BACKEND=funasr` 并恢复 `CHII_ASR_ENGINE_WS_URL`，客户端零改动。
+反向切换（回 Fun-ASR-Nano）：整分支切到 [`fun-asr-nano-0.8b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/fun-asr-nano-0.8b) 部署，门面 `CHII_ASR_BACKEND=funasr` 并恢复 `CHII_ASR_ENGINE_WS_URL`，客户端零改动。
 
 ## 🗂 仓库结构
 
@@ -135,7 +137,7 @@ python3 tools/client_example.py stream sample.wav ja
 `GET /healthz/deep` 为深度检查——用一小段内置静音音频走引擎批量转写路径做一次真实转写探测（TTL 缓存防高频烧引擎，探测不占用 WS 流式会话），引擎不可用/超时/回包异常回 503，正常回 200（含 `ok`/`backend` 字段）。与其他端点一样须带 API key（监控端点免鉴权会形同虚设，与 TTS 门面 `/healthz/deep` 同语义）。
 
 Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）下门面绑回环、公网只放行
-TCP 443，安全组**不需要**放行 9881；引擎端口 9001/10095 不要对外开放。
+TCP 443，安全组**不需要**放行 9881；引擎端口 9001 不要对外开放。
 对外提供服务须遵守 [CC BY-NC-SA 4.0](#-许可协议)（非商业）。
 
 ## 📊 评测
@@ -144,8 +146,8 @@ TCP 443，安全组**不需要**放行 9881；引擎端口 9001/10095 不要对�
 
 ```bash
 git clone https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice
-python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag funasr-nano
-# 切换 Qwen3-ASR 后用 --tag qwen3-asr 再跑一遍, 两份报告即可直接对比 CER
+python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag qwen3-asr-06
+# 切到 fun-asr-nano-0.8b / qwen3-asr-1.7b 分支后用 --tag funasr-nano / qwen3-asr-17 再跑, 多份报告即可直接对比 CER
 ```
 
 报告输出到 `outputs/eval_<tag>.csv`（整体 CER + 逐条明细，幂等可续跑）。
@@ -154,7 +156,8 @@ python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag 
 
 ## 🗺️ Roadmap
 
-- [x] 服务器首验 + 生产部署：Fun-ASR-Nano 批量/流式全链路（Tesla T4，2026-09-12 上线，见 fun-asr-nano-0.8b 分支 docs/deployment.md）
+- [x] 服务器首验 + 生产部署：Fun-ASR-Nano 批量/流式全链路（Tesla T4，2026-09-12 上线，见 [fun-asr-nano-0.8b 分支 docs/deployment.md](https://github.com/Anime2Real/Chobits-Chii-ASR/blob/fun-asr-nano-0.8b/docs/deployment.md)）
+- [x] Qwen3-ASR-0.6B 部署档案分支化：T4 实测通过（2026-10-09，vLLM 单进程 RTF 0.02，见 docs/hardware-adaptation.md）
 - [ ] Chobits-Chii-Voice 数据集上的日语 CER 基线（Fun-ASR-Nano vs Qwen3-ASR 对比）
 - [ ] Qwen3-ASR 流式 WS shim（引擎容器内基于 qwen-asr streaming SDK，复用 Nano 协议）
 - [ ] 日语识别热词支持（Fun-ASR-Nano 原生 hotwords，如角色名「秀樹」「ちぃ」）

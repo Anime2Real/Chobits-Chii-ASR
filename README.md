@@ -15,7 +15,7 @@
 
 > ✅ 2026-10-09 T4 实测通过：批量转写 RTF 0.02（vLLM 单进程），适配踩坑与调参记录见 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)。
 >
-> 🔀 分支拓扑：本分支 `qwen3-asr-0.6b` 为 **Qwen3-ASR-0.6B** 的部署构建档案——引擎基于官方 `qwenllm/qwen3-asr` 镜像，`qwen-asr-serve` 单进程提供 OpenAI 兼容批量转写；**流式 `/v1/realtime` 暂不可用**（backend_qwen3 会明确报错，WS shim 见 Roadmap）。生产在跑的 Fun-ASR-Nano 方案见 [`fun-asr-nano-0.8b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/fun-asr-nano-0.8b) 分支（T4 拓扑实录见该分支 [docs/deployment.md](https://github.com/Anime2Real/Chobits-Chii-ASR/blob/fun-asr-nano-0.8b/docs/deployment.md)）；选型对比见 [`main`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/main) 的部署分支拓扑表。
+> 🌿 分支拓扑：本分支 `qwen3-asr-0.6b` 为 **Qwen3-ASR-0.6B** 的部署构建档案——引擎基于官方 `qwenllm/qwen3-asr` 镜像，`qwen-asr-serve` 单进程提供 OpenAI 兼容批量转写；**流式 `/v1/realtime` 暂不可用**（backend_qwen3 会明确报错，WS shim 见 Roadmap）。生产在跑的 Fun-ASR-Nano 方案见 [`fun-asr-nano-0.8b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/fun-asr-nano-0.8b) 分支（T4 拓扑实录见该分支 [docs/deployment.md](https://github.com/Anime2Real/Chobits-Chii-ASR/blob/fun-asr-nano-0.8b/docs/deployment.md)）；选型对比见 [`main`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/main) 的部署分支拓扑表。
 
 《人形电脑天使心》(Chobits) 中 **小叽 (Chii / ちぃ)** 角色的 ASR（语音识别）服务项目。
 
@@ -39,7 +39,7 @@
 
 与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与协议垫片，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。
 
-## 🔀 分支拓扑与后端抽象
+## 🌿 分支拓扑与后端抽象
 
 - **HTTP 批量转写**：三分支门面代码一致，`CHII_ASR_BACKEND=funasr|qwen3` + 引擎地址环境变量切换，客户端零改动。
 - **WS 流式**：门面定义了统一对外协议（`start`/音频帧/`stop` → `partial`/`final`），协议差异由 `tools/backend_funasr.py` / `tools/backend_qwen3.py` 吸收。Qwen3 侧流式 shim 尚未实现（`backend_qwen3.py` 现为报错骨架，连接即收到明确报错并断开），本分支流式不可用；Fun-ASR-Nano 分支流式已生产验证。
@@ -140,7 +140,7 @@ Caddy 架构（2026-09-12 起，见 [docs/deployment.md](docs/deployment.md)）�
 TCP 443，安全组**不需要**放行 9881；引擎端口 9001 不要对外开放。
 对外提供服务须遵守 [CC BY-NC-SA 4.0](#-许可协议)（非商业）。
 
-## 📊 评测
+## 🎯 评测
 
 用 Chobits-Chii-Voice 数据集（487 条小叽日语台词，人工校对文本）测字错率：
 

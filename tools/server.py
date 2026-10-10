@@ -359,8 +359,12 @@ async def transcriptions(request: Request):
     # 上传大小上限：Content-Length 预检 + 读入累计兜底（ chunked 可不带长度；
     # 不设限时整文件会双份驻留门面内存，并发大文件即内存/CPU DoS）
     length = request.headers.get("content-length")
-    if length and int(length) > MAX_UPLOAD_BYTES:
-        return JSONResponse({"error": "file too large"}, status_code=413)
+    if length:
+        try:
+            if int(length) > MAX_UPLOAD_BYTES:
+                return JSONResponse({"error": "file too large"}, status_code=413)
+        except ValueError:
+            pass  # 非法 Content-Length 交给累计兜底
     data: dict = {}
     files: dict = {}
     total = 0

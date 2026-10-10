@@ -148,7 +148,7 @@ python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag 
 
 ## 🗺️ Roadmap
 
-- [x] 服务器首验 + 生产部署：Fun-ASR-Nano 批量/流式全链路（Tesla T4，2026-09-12 上线，见 funasr 分支 docs/deployment.md）
+- [x] 服务器首验 + 生产部署：Fun-ASR-Nano 批量/流式全链路（Tesla T4，2026-09-12 上线，见 [fun-asr-nano-0.8b 分支 docs/deployment.md](https://github.com/Anime2Real/Chobits-Chii-ASR/blob/fun-asr-nano-0.8b/docs/deployment.md)）
 - [x] 多引擎部署档案分支化：funasr / qwen3-0.6b / qwen3-1.7b（2026-10-09 T4 实测通过，见 docs/hardware-adaptation.md）
 - [ ] Chobits-Chii-Voice 数据集上的日语 CER 基线（Fun-ASR-Nano vs Qwen3-ASR 对比）
 - [ ] Qwen3-ASR 流式 WS shim（引擎容器内基于 qwen-asr streaming SDK，复用 Nano 协议）

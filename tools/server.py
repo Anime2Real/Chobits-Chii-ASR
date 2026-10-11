@@ -25,8 +25,10 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     同语义)。探测体积极小 (~16KB) 且与真实转写同路径同连接池, 引擎忙到探测超时时
     由探测自身超时快速 503 (degraded), 不排队、不抢占真实流量 (并发取舍见端点注释)。
 
-配置走环境变量 (生产环境经 /etc/chobits-chii-asr.env 注入, 见 docs/deployment.md):
+配置走环境变量 (生产环境经 /etc/chobits-chii-asr.env 注入, env 模板见部署分支 deploy/):
     CHII_ASR_API_KEY          客户端 Bearer 鉴权 key (必填, 未设置拒绝启动)
+    CHII_ASR_TICKET_SECRET    流式 WS 票据签名密钥 (与签发方 Chobits-Chii-LLM 垫片共享的独立
+                              密钥, 非 API_KEY 派生; 未设置时票据一律验签失败, 仅 key 直连可用)
     CHII_ASR_BACKEND          引擎后端: funasr (默认) | qwen3
     CHII_ASR_ENGINE_HTTP_URL  引擎 HTTP 地址, 默认 http://127.0.0.1:9001
     CHII_ASR_ENGINE_WS_URL    引擎 WS 地址, 默认 ws://127.0.0.1:10095
@@ -43,9 +45,10 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_DEEP_PROBE_TTL    /healthz/deep 探测结果缓存秒数, 默认 30
     CHII_ASR_DEEP_PROBE_TIMEOUT /healthz/deep 单次真实转写探测的超时秒数, 默认 15
     CHII_ASR_SSL_CERTFILE / CHII_ASR_SSL_KEYFILE  同时设置则以 HTTPS/WSS 启动
+    CHII_ASR_PORT             门面监听端口, 默认 9881 (命令行显式传端口时优先于本变量)
 
 用法:
-    python3 tools/server.py [端口, 默认 9881]   (默认绑 127.0.0.1, 生产由 Caddy 反代;
+    python3 tools/server.py [端口, 默认取 CHII_ASR_PORT 否则 9881]   (默认绑 127.0.0.1, 生产由 Caddy 反代;
                                      显式绑非回环地址须同时配 TLS, 否则拒绝启动)
 
 注意: 未启用 TLS 时 API Key 明文传输, 仅适合内网/低风险公网场景;
@@ -173,7 +176,7 @@ ENGINE_WS_URL = _getenv("ENGINE_WS_URL", "ws://127.0.0.1:10095")
 # 不认门面对外名 chii-asr, 透传批量转写时改写 model 字段为该值
 ENGINE_MODEL = _getenv("ENGINE_MODEL", "custom")
 
-# TLS: 两个变量都设置时以 HTTPS/WSS 启动 (自签名证书见 docs/deployment.md)
+# TLS: 两个变量都设置时以 HTTPS/WSS 启动 (自签名证书见部署分支 docs/deployment.md)
 SSL_CERTFILE = _getenv("SSL_CERTFILE")
 SSL_KEYFILE = _getenv("SSL_KEYFILE")
 if bool(SSL_CERTFILE) != bool(SSL_KEYFILE):

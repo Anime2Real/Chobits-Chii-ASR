@@ -224,6 +224,7 @@ async def handle_realtime(client, engine_url: str) -> None:
                                 await client.close(code=1009)
                             except Exception:
                                 pass
+                            client_gone = True  # 连接已关，收尾的补发与 drain 无对象可发
                             return
                         audio_bytes += len(frame)
                         if audio_bytes > MAX_AUDIO_BYTES:
@@ -262,7 +263,8 @@ async def handle_realtime(client, engine_url: str) -> None:
                     sys.stderr.write(f"[asr] realtime pump failed: {t.exception()!r}\n")
                     pump_failed = True
             # 客户端侧先结束: 补发 STOP (客户端断开时), 并等引擎把 final 吐完。
-            # 客户端已断开时跳过——补发/drain 只对还连着、主动 stop 的客户端有意义
+            # 客户端已断开（含本层因超限主动 close）时跳过——补发/drain 只对还连着、
+            # 主动 stop 的客户端有意义
             if t_in in done and not t_out.done() and not client_gone:
                 if not stopped:
                     try:

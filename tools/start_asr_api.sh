@@ -1,12 +1,11 @@
 #!/bin/bash
 # 启动小叽 ASR 门面 (tools/server.py: 鉴权 + 限流 + OpenAI 垫片 + 流式 WS 网关)
-# 用法: bash tools/start_asr_api.sh [端口, 默认 9881]
+# 用法: bash tools/start_asr_api.sh [端口]  (不传端口时由 server.py 读 CHII_ASR_PORT, 默认 9881)
 # 需要环境变量 CHII_ASR_API_KEY (systemd 从 /etc/chobits-chii-asr.env 读取);
 # 首次运行自动在仓库根目录建 .venv 并安装共享库 + requirements.txt
 set -e
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-PORT="${1:-9881}"
 VENV="$REPO_ROOT/.venv"
 # 门面公共逻辑共享库（chii_facade_common）源在兄弟仓库 Chobits-Chii-ServerDeploy，
 # 生产 /home/ubuntu/Github/ 下三仓库互为兄弟目录；兼容更名前的旧目录名 CloudDeploy
@@ -47,4 +46,4 @@ elif ! "$VENV/bin/python" -c "import chii_facade_common" >/dev/null 2>&1; then
     install_common_lib
 fi
 
-exec "$VENV/bin/python" "$REPO_ROOT/tools/server.py" "$PORT"
+exec "$VENV/bin/python" "$REPO_ROOT/tools/server.py" "$@"

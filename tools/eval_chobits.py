@@ -84,11 +84,14 @@ def main() -> None:
     report_path = os.path.join(out_dir, f"eval_{args.tag}.csv")
 
     done = set()
-    if os.path.isfile(report_path):  # 续跑: 已评过的文件跳过
-        with open(report_path, encoding="utf-8") as f:
-            done = {r["file"] for r in csv.DictReader(f)}
-
     total_dist = total_chars = 0
+    if os.path.isfile(report_path):  # 续跑: 已评过的文件跳过, 其距离/字符数计入整体 CER
+        with open(report_path, encoding="utf-8") as f:
+            prev = list(csv.DictReader(f))
+        done = {r["file"] for r in prev}
+        total_dist = sum(int(r["distance"]) for r in prev)
+        total_chars = sum(int(r["ref_chars"]) for r in prev)
+
     evaluated = 0
     with open(report_path, "a", encoding="utf-8", newline="") as f, \
             httpx.Client(timeout=300.0) as client:
@@ -104,7 +107,7 @@ def main() -> None:
                 wav_path = os.path.join(args.voice, "wavs", name)
             try:
                 hyp = transcribe(client, wav_path)
-            except httpx.HTTPError as e:
+            except (httpx.HTTPError, OSError) as e:  # OSError: 音频文件缺失等
                 print(f"[eval] {name}: 转写失败 ({type(e).__name__}), 跳过", file=sys.stderr)
                 continue
             ref_n, hyp_n = normalize(ref), normalize(hyp)
@@ -122,7 +125,7 @@ def main() -> None:
     if total_chars:
         print(f"\n[eval] 后端 {args.tag}: 整体 CER = "
               f"{total_dist / total_chars:.4f} ({total_dist}/{total_chars} 字符, "
-              f"{evaluated} 条), 明细见 {report_path}")
+              f"{len(done) + evaluated} 条), 明细见 {report_path}")
     else:
         print("[eval] 没有可评测的条目")
 

@@ -97,7 +97,7 @@ Chobits-Chii-ASR/
 
 ## 🚀 快速开始
 
-推理只需要引擎镜像与门面环境，无需训练数据。完整服务器部署（含 systemd 与 TLS）见 [docs/deployment.md](docs/deployment.md)。各仓库用到的国内镜像/加速源汇总见 [Chobits-Chii-TTS docs/mirrors.md](https://github.com/Anime2Real/Chobits-Chii-TTS/blob/main/docs/mirrors.md)。
+推理只需要引擎镜像与门面环境，无需训练数据。完整服务器部署（含 systemd 与 TLS）见 [docs/deployment.md](docs/deployment.md)。各仓库用到的国内镜像/加速源汇总见 [Chobits-Chii-TTS docs/mirrors.md](https://github.com/Anime2Real/Chobits-Chii-TTS/blob/gpt-sovits/docs/mirrors.md)。
 
 ```bash
 # 1. 构建并启动引擎容器 (模型权重首启自动经 ModelScope 下载)

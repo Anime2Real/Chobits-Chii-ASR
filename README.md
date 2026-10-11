@@ -29,6 +29,13 @@
 
 对客户端的协议契约（WS 会话语义、X-6 错误码、ASR 票据格式）的机器可读单一事实源见 [`docs/contracts/`](docs/contracts/)；各方案的硬件适配经验（T4 已实测、V100 预留）统一收录在 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)（三分支同款，main 为原件）。
 
+## 🧭 规则（2026-10-11 起）
+
+1. `main` 承载引擎无关的门面代码（`tools/`）、跨服务协议契约（`docs/contracts/`）、测试（`tests/`）与硬件适配文档，**同时兼作共享源**：门面 / 契约 / 测试 / 通用脚本的改动一律先落 `main`，再 `git cherry-pick <commit>` 到三条部署分支，部署分支的这些文件须与 `main` 保持一致（`22a6a0e` / `053507e` 未及时回灌、生产分支带着会 500 的旧预检即为反面教材）。
+2. 部署分支独立演进、互不合并；引擎专属内容（`docker/`、`deploy/`、引擎适配参数与实录）只留在对应部署分支。
+3. 新引擎方案：以 `main` 为底切 `<引擎名-版本>` 分支并更新上表（与 LLM「不要从 main 切」不同——本仓 `main` 就是共享源）。
+4. 本 README 引用其他仓库的内容文件时，必须指向该仓的内容分支（如 TTS 的 `gpt-sovits`），不指 `blob/main`——对方 `main` 收缩成分支索引后这类链接必 404。
+
 ## 📄 许可协议
 
 本项目的派生内容遵循数据集的 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans)（署名-非商业性使用-相同方式共享）协议。

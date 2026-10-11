@@ -104,7 +104,7 @@ docker run -d --name chobits-chii-asr-engine --gpus all --restart unless-stopped
 - [x] `POST /v1/audio/transcriptions` 日语样本 200 且文本合理
 - [x] 顺序 5 次 + 并发 4/8 压测（funasr 另测流式 1/4 路与 START/STOP 协议）
 - [x] 与生产其他容器共存（测试期间受控停启，无干扰遗留）
-- [ ] Qwen3-ASR 流式（WS shim 落地前不可用，见 README Roadmap）
+- [ ] Qwen3-ASR 流式（WS shim 落地前不可用，见模型分支 README 的 Roadmap）
 
 ---
 

@@ -24,7 +24,9 @@
   （is_final 帧不结束会话只下推 final、stopped 事件才结束、多句会话连续下发
   两句 final 后正常关闭）；WS 背压（引擎 connect
   带 max_size=4MB、客户端单帧 >1MB → error + close 1009 且帧不进引擎、
-  引擎消息超限 PayloadTooBig → 客户端收到 error 帧）；
+  引擎消息超限 PayloadTooBig → 客户端收到 error 帧）；外部取消兜底
+  （门面 WS_SESSION_MAX 超时即外部 cancel handle_realtime：双泵必须被
+  取消回收、无任务泄漏）；引擎非 JSON / 非对象消息落门面日志且会话不受影响；
   error 帧 code 字段（X-6 枚举契约钉死、各报错站点 code 值、qwen3 骨架
   internal_error）。
 - `test_endpoints.py`：TestClient 端点级——/healthz 免鉴权、/v1/models 无 key
@@ -35,7 +37,9 @@
   字段改写引擎注册名）、流式 WS 并发准入（同一身份第 5 个连接 4429、无身份
   回退按 IP、断开释放槽位、4429 超限拒绝不烧票且票据稍后可用、accept 后
   正常核销同票二次使用 4401、非 ASCII 签名票据 4401 而非 500）、accept 失败
-  路径（accept 抛异常：计数器配平不泄漏、票据不烧毁、同身份反复失败不占配额）。
+  路径（accept 抛异常：计数器配平不泄漏、票据不烧毁、同身份反复失败不占配额）；accept 后二次校验
+  （并发准入竞态回归：6 个同身份握手同时越过前置检查，只有 4 个准入、
+  超出的 4429 且不计数不烧票）。
 
 ## 状态隔离
 

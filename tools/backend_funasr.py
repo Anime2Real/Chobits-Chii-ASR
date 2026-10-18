@@ -130,8 +130,11 @@ async def _forward_engine_message(client, raw, sentences: list) -> bool:
     try:
         data = json.loads(raw)
     except (TypeError, json.JSONDecodeError):
+        # 引擎变砖/协议变更时这里是第一现场：原文落门面日志排障（截断防刷屏）
+        sys.stderr.write(f"[asr] engine non-JSON message: {raw[:200]!r}\n")
         return False
     if not isinstance(data, dict):
+        sys.stderr.write(f"[asr] engine non-object message: {raw[:200]!r}\n")
         return False
     event = data.get("event")
     if event == "error":
@@ -253,30 +256,39 @@ async def handle_realtime(client, engine_url: str) -> None:
 
             t_in = asyncio.create_task(pump_in())
             t_out = asyncio.create_task(pump_out())
-            done, pending = await asyncio.wait({t_in, t_out},
-                                               return_when=asyncio.FIRST_COMPLETED)
-            # 已完成任务如带异常必须 retrieve，否则 GC 时抛 "exception was never retrieved"
             pump_failed = False
-            for t in done:
-                if not t.cancelled() and t.exception() is not None:
-                    sys.stderr.write(f"[asr] realtime pump failed: {t.exception()!r}\n")
-                    pump_failed = True
-            # 客户端侧先结束: 补发 STOP (客户端断开时), 并等引擎把 final 吐完。
-            # 客户端已断开时跳过——补发/drain 只对还连着、主动 stop 的客户端有意义
-            if t_in in done and not t_out.done() and not client_gone:
-                if not stopped:
+            try:
+                done, pending = await asyncio.wait({t_in, t_out},
+                                                   return_when=asyncio.FIRST_COMPLETED)
+                # 已完成任务如带异常必须 retrieve，否则 GC 时抛 "exception was never retrieved"
+                for t in done:
+                    if not t.cancelled() and t.exception() is not None:
+                        sys.stderr.write(f"[asr] realtime pump failed: {t.exception()!r}\n")
+                        pump_failed = True
+                # 客户端侧先结束: 补发 STOP (客户端断开时), 并等引擎把 final 吐完。
+                # 客户端已断开时跳过——补发/drain 只对还连着、主动 stop 的客户端有意义
+                if t_in in done and not t_out.done() and not client_gone:
+                    if not stopped:
+                        try:
+                            await engine.send("STOP")
+                        except websockets.ConnectionClosed:
+                            pass
                     try:
-                        await engine.send("STOP")
-                    except websockets.ConnectionClosed:
+                        await asyncio.wait_for(asyncio.shield(t_out), timeout=DRAIN_TIMEOUT)
+                    except (asyncio.TimeoutError, websockets.ConnectionClosed):
                         pass
-                try:
-                    await asyncio.wait_for(asyncio.shield(t_out), timeout=DRAIN_TIMEOUT)
-                except (asyncio.TimeoutError, websockets.ConnectionClosed):
-                    pass
-            for t in pending:
-                t.cancel()
-            if pending:
-                await asyncio.gather(*pending, return_exceptions=True)
+                for t in pending:
+                    t.cancel()
+                if pending:
+                    await asyncio.gather(*pending, return_exceptions=True)
+            finally:
+                # 兜底取消存活泵：正常路径上面已逐个收尾，这里覆盖外部取消——门面
+                # WS_SESSION_MAX 超时用 wait_for 取消本协程时，await asyncio.wait
+                # 直接抛 CancelledError、不经过上面的收尾，不兜底则泵任务泄漏
+                for t in (t_in, t_out):
+                    if not t.done():
+                        t.cancel()
+                await asyncio.gather(t_in, t_out, return_exceptions=True)
             # 泵带异常结束（如引擎消息超 ENGINE_MAX_MSG_BYTES 触发 PayloadTooBig）：
             # 细节已落门面日志，客户端只给通用 error 帧再关（正常 stopped/stop 结束无此帧）
             if pump_failed and not client_gone:

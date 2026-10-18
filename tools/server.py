@@ -27,6 +27,11 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
 
 配置走环境变量 (生产环境经 /etc/chobits-chii-asr.env 注入, 见 docs/deployment.md):
     CHII_ASR_API_KEY          客户端 Bearer 鉴权 key (必填, 未设置拒绝启动)
+    CHII_ASR_TICKET_SECRET    WS 流式票据 HMAC 验签密钥 (与垫片 ASR_TICKET_SECRET 一致;
+                              未设置则票据鉴权不可用, 流式仅 API key 可直连)
+    CHII_ASR_BIND             监听地址, 默认 127.0.0.1 (非回环绑定须同时配下方
+                              CHII_ASR_SSL_*, 否则拒绝启动; 生产由 Caddy 反代时绑本机)
+    CHII_ASR_PORT             监听端口, 默认 9881 (命令行第一个参数可覆盖)
     CHII_ASR_BACKEND          引擎后端: funasr (默认) | qwen3
     CHII_ASR_ENGINE_HTTP_URL  引擎 HTTP 地址, 默认 http://127.0.0.1:9001
     CHII_ASR_ENGINE_WS_URL    引擎 WS 地址, 默认 ws://127.0.0.1:10095
@@ -34,7 +39,7 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_RATE_LIMIT       每 IP 每分钟限流次数 (转写与流式), 默认 60, 设 0 关闭
     CHII_ASR_MAX_UPLOAD_BYTES 批量转写上传上限 (字节), 默认 25MB
     CHII_ASR_WS_MAX_PER_CLIENT  流式每客户端并发连接上限, 默认 4 (按票据身份计数,
-                                无身份时回退按 IP; 旧名 CHII_ASR_WS_MAX_PER_IP 兼容读取)
+                                无身份时回退按 IP)
     CHII_ASR_WS_MAX_GLOBAL    流式全局并发连接上限, 默认 32
     CHII_ASR_WS_SESSION_MAX   流式会话最长秒数, 默认 300
     CHII_ASR_WS_IDLE_SECONDS  流式空闲超时秒数 (无帧即断), 默认 60
@@ -161,9 +166,9 @@ def _ticket_mark_used(jti: str, exp: int) -> None:
 
 RATE_LIMIT = _getenv_int("RATE_LIMIT", 60)
 MAX_UPLOAD_BYTES = _getenv_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
-# 新名优先；旧名 CHII_ASR_WS_MAX_PER_IP 兼容读取（语义已由每 IP 改为每客户端身份）
-WS_MAX_PER_CLIENT = _getenv_int(
-    "WS_MAX_PER_CLIENT" if _getenv("WS_MAX_PER_CLIENT") else "WS_MAX_PER_IP", 4)
+# 流式每客户端身份并发上限（语义 2026-09-14 由每 IP 改为每客户端身份；
+# 旧名 CHII_ASR_WS_MAX_PER_IP 的兼容读取已下线，生产 env 已确认不再使用）
+WS_MAX_PER_CLIENT = _getenv_int("WS_MAX_PER_CLIENT", 4)
 WS_MAX_GLOBAL = _getenv_int("WS_MAX_GLOBAL", 32)
 WS_SESSION_MAX = _getenv_float("WS_SESSION_MAX", 300.0)
 BACKEND = _getenv("BACKEND", "funasr")
@@ -297,8 +302,9 @@ async def healthz_deep(request: Request):
         return JSONResponse({"error": "unauthorized"}, status_code=401)
     if time.time() - _deep_probe["at"] < DEEP_PROBE_TTL:
         return _deep_probe_response()
-    # 单飞：上一次探测还在等引擎时不并发重入。检查与获取之间无 await，
-    # 在单事件循环内原子完成，不会检后被别人抢先
+    # 单飞：上一次探测还在等引擎时不并发重入。locked() 只是 fast-path 预判——
+    # 获取锁本身是 await，检查与获取之间并不原子；防重入的正确性由持锁后的
+    # TTL 二次校验（下方 async with 块内）保证
     if _deep_probe_lock.locked():
         if _deep_probe["at"] > 0:
             return _deep_probe_response()  # 过期缓存也回，防监控在探测窗口内抖 503
@@ -436,7 +442,15 @@ async def realtime(ws: WebSocket):
         await ws.accept()
     except Exception:
         return
-    # accept 成功后才占并发槽位并核销：任何路径计数配平（finally 必配平一次自增），
+    # accept 后二次校验：accept 本身是 await（前置检查与自增之间的挂起点），并发
+    # 握手可在前置检查后同时越过它——不在此处复核，每客户端/全局上限会被并发
+    # 突发放大（每条连接独占一条引擎流式会话）。复核与自增之间无 await，单事件
+    # 循环内原子完成；此刻拒绝在自增之前，同样不计数、不核销票据，与前置 4429
+    # 路径同一语义
+    if _ws_active_total >= WS_MAX_GLOBAL or _ws_active.get(bucket, 0) >= WS_MAX_PER_CLIENT:
+        await ws.close(code=4429)
+        return
+    # accept 成功且复核通过后才占并发槽位并核销：任何路径计数配平（finally 必配平一次自增），
     # 并发超限/验签失败/accept 失败的拒绝路径一律不计数不烧票。
     # 剩余竞态窗口（验签→核销之间同 jti 一票多开可双双准入）见 _ticket_mark_used
     _ws_active[bucket] += 1

@@ -9,19 +9,13 @@ REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 PORT="${1:-9881}"
 VENV="$REPO_ROOT/.venv"
 # 门面公共逻辑共享库（chii_facade_common）源在兄弟仓库 Chobits-Chii-ServerDeploy，
-# 生产 /home/ubuntu/Github/ 下三仓库互为兄弟目录；兼容更名前的旧目录名 CloudDeploy
-COMMON_LIB=""
-for _sibling in "$REPO_ROOT/../Chobits-Chii-ServerDeploy" "$REPO_ROOT/../Chobits-Chii-CloudDeploy"; do
-    if [ -d "$_sibling/tools/chii-facade-common" ]; then
-        COMMON_LIB="$_sibling/tools/chii-facade-common"
-        break
-    fi
-done
+# 生产 /home/ubuntu/Github/ 下三仓库互为兄弟目录
+COMMON_LIB="$REPO_ROOT/../Chobits-Chii-ServerDeploy/tools/chii-facade-common"
 
 # 前置检查：共享库缺失时先给出可操作的错误再退出，避免建完 venv 才失败
 if [ ! -d "$COMMON_LIB" ]; then
     echo "[错误] 未找到门面共享库: $REPO_ROOT/../Chobits-Chii-ServerDeploy/tools/chii-facade-common" >&2
-    if [ -d "$REPO_ROOT/../Chobits-Chii-ServerDeploy" ] || [ -d "$REPO_ROOT/../Chobits-Chii-CloudDeploy" ]; then
+    if [ -d "$REPO_ROOT/../Chobits-Chii-ServerDeploy" ]; then
         echo "       兄弟仓库目录已存在但缺少 tools/chii-facade-common：ServerDeploy 的 main 分支仅作" >&2
         echo "       索引（无 tools/ 目录），共享库源在 cloud 分支，请检出后重试:" >&2
         echo "       git -C $REPO_ROOT/../Chobits-Chii-ServerDeploy switch cloud" >&2

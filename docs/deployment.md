@@ -106,8 +106,7 @@ journalctl -u chobits-chii-asr -f
 > - 批量转写上传上限 25MB（`CHII_ASR_MAX_UPLOAD_BYTES`，Content-Length 预检 + 读入累计兜底）；
 > - WS 流式资源防护：每客户端身份 / 全局并发上限（4 / 32）、会话最长 300s、空闲 60s 即断、
 >   单会话音频总量 10MB——此前挂死连接即可耗尽引擎 GPU 会话；
-> - WS 并发按票据身份计数（`CHII_ASR_WS_MAX_PER_CLIENT`，旧名 `CHII_ASR_WS_MAX_PER_IP`
->   兼容读取）：票据携带垫片签入的调用方身份（guest:<installId> / acct:<邮箱>，
+> - WS 并发按票据身份计数（`CHII_ASR_WS_MAX_PER_CLIENT`）：票据携带垫片签入的调用方身份（guest:<installId> / acct:<邮箱>，
 >   被 HMAC 签名覆盖），同一 NAT/出口 IP 下各客户端独立配额；旧票据与 API key
 >   直连无身份，回退按 IP 计数；
 > - WS 票据改为 `<exp>.<jti>.<sig>`，jti 核销、单次使用（与垫片同步更新）；

@@ -1,7 +1,12 @@
 """tools/server.py 纯逻辑单元测试：票据核销 / 配置容错 / XFF（不触网络）。"""
 import base64
+import os
+import subprocess
+import sys
 import time
 from types import SimpleNamespace
+
+import pytest
 
 import server
 from conftest import make_ticket
@@ -162,6 +167,37 @@ def test_getenv_float_valid(monkeypatch):
 def test_getenv_float_invalid_falls_back(monkeypatch):
     monkeypatch.setenv("CHII_ASR_BAR", "1.5x")
     assert server._getenv_float("BAR", 1.0) == 1.0
+
+
+# --- CHII_ASR_ENGINE_TIMEOUT -----------------------------------------------------
+
+def test_engine_timeout_default_300():
+    # 批量透传引擎调用的默认超时（conftest 未设 CHII_ASR_ENGINE_TIMEOUT）：
+    # 与旧客户端硬编码 httpx.Timeout(300.0) 同口径
+    assert server.ENGINE_TIMEOUT == 300.0
+
+
+def test_engine_timeout_env_parse(monkeypatch):
+    monkeypatch.setenv("CHII_ASR_ENGINE_TIMEOUT", "600.5")
+    assert server._getenv_float("ENGINE_TIMEOUT", 300.0) == 600.5
+
+
+# --- WS 资源防护启动校验 ---------------------------------------------------------
+
+@pytest.mark.parametrize("var", ["CHII_ASR_WS_MAX_PER_CLIENT",
+                                 "CHII_ASR_WS_MAX_GLOBAL",
+                                 "CHII_ASR_WS_SESSION_MAX"])
+@pytest.mark.parametrize("value", ["0", "-1"])
+def test_ws_guard_non_positive_rejected_at_startup(var, value):
+    # 资源防护非正值旧行为是 EnvConfig 静默接受，运行期才表现为流式全拒/秒断；
+    # 现在必须启动即 sys.exit 明确报错（子进程重导 server.py 走模块级校验）
+    env = dict(os.environ, **{var: value})
+    env["PYTHONPATH"] = os.path.dirname(server.__file__)
+    proc = subprocess.run([sys.executable, "-c", "import server"],
+                          env=env, capture_output=True, text=True, timeout=60)
+    assert proc.returncode != 0
+    assert var in proc.stderr
+    assert "必须为正数" in proc.stderr
 
 
 # --- _client_ip ----------------------------------------------------------------

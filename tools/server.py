@@ -38,6 +38,8 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
     CHII_ASR_ENGINE_MODEL     引擎注册的模型名 (funasr --model-path 模式为 custom), 默认 custom
     CHII_ASR_RATE_LIMIT       每 IP 每分钟限流次数 (转写与流式), 默认 60, 设 0 关闭
     CHII_ASR_MAX_UPLOAD_BYTES 批量转写上传上限 (字节), 默认 25MB
+    CHII_ASR_ENGINE_TIMEOUT   批量转写引擎调用超时秒数, 默认 300 (float); 调大上传上限
+                              或引擎较慢时须同步调大——上限内最大文件的转写耗时不应超过它
     CHII_ASR_WS_MAX_PER_CLIENT  流式每客户端并发连接上限, 默认 4 (按票据身份计数,
                                 无身份时回退按 IP)
     CHII_ASR_WS_MAX_GLOBAL    流式全局并发连接上限, 默认 32
@@ -171,6 +173,14 @@ MAX_UPLOAD_BYTES = _getenv_int("MAX_UPLOAD_BYTES", 25 * 1024 * 1024)
 WS_MAX_PER_CLIENT = _getenv_int("WS_MAX_PER_CLIENT", 4)
 WS_MAX_GLOBAL = _getenv_int("WS_MAX_GLOBAL", 32)
 WS_SESSION_MAX = _getenv_float("WS_SESSION_MAX", 300.0)
+# 资源防护非正值静默接受 = 流式不可用：上限 ≤0 全拒、会话时长 ≤0 使
+# asyncio.wait_for 立即超时——启动即明确报错，不留到运行期才表现为"连上就断"
+for _guard_name, _guard_val in (("WS_MAX_PER_CLIENT", WS_MAX_PER_CLIENT),
+                                ("WS_MAX_GLOBAL", WS_MAX_GLOBAL),
+                                ("WS_SESSION_MAX", WS_SESSION_MAX)):
+    if _guard_val <= 0:
+        sys.exit(f"[错误] CHII_ASR_{_guard_name} 必须为正数, 当前值 {_guard_val!r}")
+ENGINE_TIMEOUT = _getenv_float("ENGINE_TIMEOUT", 300.0)
 BACKEND = _getenv("BACKEND", "funasr")
 ENGINE_HTTP_URL = _getenv("ENGINE_HTTP_URL", "http://127.0.0.1:9001").rstrip("/")
 ENGINE_WS_URL = _getenv("ENGINE_WS_URL", "ws://127.0.0.1:10095")
@@ -276,6 +286,10 @@ async def _probe_engine() -> dict:
                                   timeout=DEEP_PROBE_TIMEOUT)
     except httpx.HTTPError as exc:
         return {"ok": False, "engine": f"unreachable: {exc.__class__.__name__}"}
+    except Exception as exc:
+        # 非预期异常（连接池怪错等）归入 degraded 而非透出成端点 500；
+        # CancelledError 继承 BaseException 不受此兜捕获
+        return {"ok": False, "engine": f"probe error: {exc.__class__.__name__}"}
     if resp.status_code != 200:
         return {"ok": False, "engine": f"http_{resp.status_code}"}
     try:
@@ -388,7 +402,8 @@ async def transcriptions(request: Request):
     if "model" not in data:
         data["model"] = ENGINE_MODEL
     try:
-        resp = await _engine.post("/v1/audio/transcriptions", data=data, files=files)
+        resp = await _engine.post("/v1/audio/transcriptions", data=data, files=files,
+                                  timeout=ENGINE_TIMEOUT)
     except httpx.HTTPError as e:
         return JSONResponse({"error": f"upstream error: {type(e).__name__}"},
                             status_code=502)

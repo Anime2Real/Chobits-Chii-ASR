@@ -86,6 +86,15 @@ def test_healthz_deep_engine_unreachable_503(client, monkeypatch):
     assert resp.json()["engine"] == "unreachable: ConnectError"
 
 
+def test_healthz_deep_engine_unexpected_exc_503_not_500(client, monkeypatch):
+    # 非 httpx 异常（连接池怪错等）不得把端点打成 500：归 degraded
+    engine = FakeEngine(exc=RuntimeError("pool closed"))
+    monkeypatch.setattr(server, "_engine", engine)
+    resp = client.get("/healthz/deep", headers=AUTH)
+    assert resp.status_code == 503
+    assert resp.json()["engine"] == "probe error: RuntimeError"
+
+
 def test_healthz_deep_bad_response_503(client, monkeypatch):
     # 引擎 200 但回的不是转写 JSON（变砖/代理错乱）：判 degraded 而非 200
     engine = FakeEngine(resp=FakeResp(200, b"<html>proxy error</html>",
@@ -193,7 +202,7 @@ class FakeEngine:
         self.calls = []
 
     async def post(self, url, data=None, files=None, timeout=None):
-        self.calls.append({"url": url, "data": data, "files": files})
+        self.calls.append({"url": url, "data": data, "files": files, "timeout": timeout})
         if self.exc is not None:
             raise self.exc
         return self.resp
@@ -244,6 +253,16 @@ def test_transcription_success_passthrough(client, monkeypatch):
     call = engine.calls[0]
     assert call["data"]["model"] == server.ENGINE_MODEL
     assert call["data"]["language"] == "ja"
+    # 批量透传按 CHII_ASR_ENGINE_TIMEOUT 超时（默认 300s，与旧客户端硬超时同口径）
+    assert call["timeout"] == server.ENGINE_TIMEOUT
+
+
+def test_transcription_engine_timeout_env_applied(client, monkeypatch):
+    monkeypatch.setattr(server, "ENGINE_TIMEOUT", 600.0)
+    engine = FakeEngine(resp=FakeResp(200, b'{"text": "hello"}'))
+    monkeypatch.setattr(server, "_engine", engine)
+    assert _upload(client).status_code == 200
+    assert engine.calls[0]["timeout"] == 600.0
 
 
 def test_transcription_no_key_401(client):

@@ -393,6 +393,68 @@ def test_ws_accept_failure_does_not_leak_counter_or_burn_ticket():
     assert server._ticket_verify(ticket)[0] is True
 
 
+# --- 流式 WS：accept 后二次校验（并发准入竞态回归） ----------------------------------
+
+def test_ws_concurrent_burst_capped_by_post_accept_recheck(monkeypatch):
+    """并发准入竞态回归：6 个同身份握手同时越过前置检查（SlowAcceptWS.accept 让出
+    事件循环，复现真实握手的挂起点），accept 后二次校验必须把超出的连接以 4429
+    拒掉——旧实现检查与自增之间隔着 accept 的 await，并发突发可全部准入（每客户端
+    上限 4 被放大到 6）。拒绝路径不计数、不烧票。"""
+    entered = []
+    release = asyncio.Event()
+
+    async def fake_backend(ws, url):
+        entered.append(ws)
+        await release.wait()
+
+    monkeypatch.setattr(server.backend, "handle_realtime", fake_backend)
+
+    class SlowAcceptWS:
+        """starlette WebSocket 替身：accept() 挂起让出循环，复现「检查→accept→
+        自增」窗口内多个并发握手的交错（该窗口在旧实现中可被同过）。"""
+
+        def __init__(self, ticket):
+            self.client = SimpleNamespace(host="127.0.0.1")
+            self.headers = {}
+            self.query_params = {"ticket": ticket}
+            self.close_codes = []
+
+        async def accept(self):
+            await asyncio.sleep(0)
+
+        async def close(self, code=1000):
+            self.close_codes.append(code)
+
+    tickets = [make_ticket(identity="acct:burst", jti="jti-burst-%d" % i)
+               for i in range(6)]
+
+    async def burst():
+        ws_list = [SlowAcceptWS(t) for t in tickets]
+        gate = asyncio.gather(*(server.realtime(ws) for ws in ws_list))
+        # 等 4 进 2 拒的准入结果落定，再放行适配层让会话结束、计数配平
+        while len(entered) < 4:
+            await asyncio.sleep(0.01)
+        assert any(ws.close_codes for ws in ws_list)  # 拒绝已先行落定
+        release.set()
+        await gate
+        return ws_list
+
+    ws_list = asyncio.run(burst())
+
+    assert len(entered) == 4  # WS_MAX_PER_CLIENT：只有 4 个真正进入适配层
+    rejected = [ws for ws in ws_list if ws not in entered]
+    assert len(rejected) == 2
+    assert all(ws.close_codes == [4429] for ws in rejected)
+    # 计数配平 + 拒绝不烧票（与前置 4429 路径同一语义）
+    assert server._ws_active_total == 0
+    assert dict(server._ws_active) == {}
+    for i, ws in enumerate(ws_list):
+        if ws in entered:
+            assert "jti-burst-%d" % i in server._used_tickets
+        else:
+            assert "jti-burst-%d" % i not in server._used_tickets
+
+
 def test_ws_accept_failure_repeated_then_normal_accept_still_admitted():
     # 同一身份连续 accept 失败（弱网重试）不得消耗并发配额，正常连接照常准入
     tickets = [make_ticket(identity="acct:u1", jti="jti-rb-%d" % i) for i in range(3)]

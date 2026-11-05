@@ -169,6 +169,12 @@ WS_MAX_PER_CLIENT = _getenv_int(
     "WS_MAX_PER_CLIENT" if _getenv("WS_MAX_PER_CLIENT") else "WS_MAX_PER_IP", 4)
 WS_MAX_GLOBAL = _getenv_int("WS_MAX_GLOBAL", 32)
 WS_SESSION_MAX = _getenv_float("WS_SESSION_MAX", 300.0)
+# 非正值会让流式功能静默瘫痪（0 → 全拒 / 秒断），启动即报错而非运行期谜之行为
+for _name, _val in (("WS_MAX_PER_CLIENT", WS_MAX_PER_CLIENT),
+                    ("WS_MAX_GLOBAL", WS_MAX_GLOBAL),
+                    ("WS_SESSION_MAX", WS_SESSION_MAX)):
+    if _val <= 0:
+        sys.exit(f"[错误] CHII_ASR_{_name} 必须为正数, 当前值 {_val!r}")
 BACKEND = _getenv("BACKEND", "funasr")
 ENGINE_HTTP_URL = _getenv("ENGINE_HTTP_URL", "http://127.0.0.1:9001").rstrip("/")
 ENGINE_WS_URL = _getenv("ENGINE_WS_URL", "ws://127.0.0.1:10095")
@@ -274,6 +280,9 @@ async def _probe_engine() -> dict:
                                   timeout=DEEP_PROBE_TIMEOUT)
     except httpx.HTTPError as exc:
         return {"ok": False, "engine": f"unreachable: {exc.__class__.__name__}"}
+    except Exception as exc:  # 非 httpx 异常（如 Client is closed）不得透出成端点 500；
+        # CancelledError 属 BaseException，不被此处兜捕获
+        return {"ok": False, "engine": f"probe error: {exc.__class__.__name__}"}
     if resp.status_code != 200:
         return {"ok": False, "engine": f"http_{resp.status_code}"}
     try:
@@ -439,7 +448,14 @@ async def realtime(ws: WebSocket):
         await ws.accept()
     except Exception:
         return
-    # accept 成功后才占并发槽位并核销：任何路径计数配平（finally 必配平一次自增），
+    # accept 后二次校验：accept 本身是 await（前置检查与自增之间的挂起点），并发握手
+    # 可在前置检查后同时越过它——不复核则每客户端/全局上限被并发突发放大（每条连接
+    # 独占一条引擎流式会话）。复核与自增之间无 await，单事件循环内原子完成；此刻拒绝
+    # 在自增之前，同样不计数、不核销票据，与前置 4429 路径同一语义
+    if _ws_active_total >= WS_MAX_GLOBAL or _ws_active.get(bucket, 0) >= WS_MAX_PER_CLIENT:
+        await ws.close(code=4429)
+        return
+    # accept 成功且复核通过后才占并发槽位并核销：任何路径计数配平（finally 必配平一次自增），
     # 并发超限/验签失败/accept 失败的拒绝路径一律不计数不烧票。
     # 剩余竞态窗口（验签→核销之间同 jti 一票多开可双双准入）见 _ticket_mark_used
     _ws_active[bucket] += 1

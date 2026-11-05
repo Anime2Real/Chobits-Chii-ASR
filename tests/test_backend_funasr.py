@@ -377,6 +377,43 @@ def test_error_code_engine_connect_failed(monkeypatch):
     assert_error_code(client, "engine_conn_failed")
 
 
+def test_external_cancellation_cancels_pumps(monkeypatch):
+    """门面 WS_SESSION_MAX 超时路径：外部 cancel handle_realtime 时，双泵必须被
+    兜底取消回收——旧实现只在 asyncio.wait 正常返回后才清理泵，取消路径泄漏
+    泵任务（且可能刷 "exception was never retrieved" 噪音）。"""
+    monkeypatch.setattr(backend.websockets, "connect",
+                        lambda url, **kw: HangEngineConn())
+    client = HoldClient({"type": "start", "language": "ja"})
+
+    async def scenario():
+        task = asyncio.create_task(backend.handle_realtime(client, "ws://fake"))
+        await asyncio.sleep(0.05)  # 等双泵进入挂起
+        task.cancel()
+        with pytest.raises(asyncio.CancelledError):
+            await task
+        leftovers = [t for t in asyncio.all_tasks()
+                     if t is not asyncio.current_task()]
+        assert leftovers == []
+
+    run(scenario())
+
+
+def test_engine_non_json_message_logged_and_ignored(monkeypatch, capsys):
+    # 引擎非 JSON / 非对象消息：原文落门面日志（引擎变砖/协议变更的第一现场），
+    # 消息本身忽略，会话不受影响、正常关闭
+    conn = ScriptEngineConn(["garbage-not-json",
+                             json.dumps(["not", "an", "object"]),
+                             json.dumps({"event": "stopped"})])
+    monkeypatch.setattr(backend.websockets, "connect", lambda url, **kw: conn)
+    client = HoldClient({"type": "start", "language": "ja"})
+    run(backend.handle_realtime(client, "ws://fake"))
+    err = capsys.readouterr().err
+    assert "garbage-not-json" in err
+    assert '["not", "an", "object"]' in err
+    assert not [f for f in client.sent if f.get("type") == "error"]
+    assert client.closed_with == 1000
+
+
 def test_error_code_qwen3_stub():
     import backend_qwen3
     client = FakeClient({"type": "start"})

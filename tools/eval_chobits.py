@@ -85,19 +85,27 @@ def main() -> None:
 
     done = set()
     total_dist = total_chars = 0
+    # 表头只在「文件不存在或为空」时写：以 append 打开时若按 done 判定，
+    # 首轮全部跳过（音频缺失/转写失败）会留下只有表头的文件，续跑便会重复写头，
+    # 下一轮的 DictReader 把第二行表头当数据 → int("distance") 崩
+    needs_header = not (os.path.isfile(report_path) and os.path.getsize(report_path) > 0)
     if os.path.isfile(report_path):  # 续跑: 已评过的文件跳过, 其距离/字符数计入整体 CER
         with open(report_path, encoding="utf-8") as f:
-            prev = list(csv.DictReader(f))
+            # 过滤掉历史文件里可能存在的重复表头行（旧版本 bug 的产物）
+            prev = [r for r in csv.DictReader(f)
+                    if r.get("file") and r["file"] != "file"]
         done = {r["file"] for r in prev}
-        total_dist = sum(int(r["distance"]) for r in prev)
-        total_chars = sum(int(r["ref_chars"]) for r in prev)
+        total_dist = sum(int(r["distance"]) for r in prev
+                         if (r.get("distance") or "").lstrip("-").isdigit())
+        total_chars = sum(int(r["ref_chars"]) for r in prev
+                          if (r.get("ref_chars") or "").isdigit())
 
     evaluated = 0
     with open(report_path, "a", encoding="utf-8", newline="") as f, \
             httpx.Client(timeout=300.0) as client:
         writer = csv.DictWriter(f, fieldnames=["file", "reference", "hypothesis",
                                                "distance", "ref_chars", "cer"])
-        if not done:
+        if needs_header:
             writer.writeheader()
         for name, ref in rows:
             if name in done:

@@ -37,7 +37,7 @@
   funasr-realtime-server  流式 WebSocket 服务 (:10095, vLLM)
 ```
 
-与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与协议垫片，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。
+与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）一致的约定：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与 OpenAI 兼容协议门面，密钥经 `/etc/chobits-chii-asr.env` 注入，systemd 守护。
 
 ## 🔀 与 Qwen3-ASR 方案的切换
 
@@ -79,7 +79,7 @@ Chobits-Chii-ASR/
 │   ├── Dockerfile             # Fun-ASR-Nano-2512 引擎 (funasr vLLM 服务栈 + T4 适配)
 │   └── entrypoint.sh          # 单容器双进程: HTTP :9001 + WS :10095
 ├── tools/                  # 工具脚本
-│   ├── server.py              # ASR 门面 (API Key 鉴权 + 限流 + OpenAI 垫片 + 流式 WS 网关)
+│   ├── server.py              # ASR 门面 (API Key 鉴权 + 限流 + OpenAI 兼容门面 + 流式 WS 网关)
 │   ├── backend_funasr.py      # Fun-ASR 后端适配 (Nano START/STOP 协议翻译)
 │   ├── backend_qwen3.py       # Qwen3-ASR 后端适配 (HTTP 现成; WS 留骨架, 见 Roadmap)
 │   ├── start_asr_api.sh       # 启动门面 (自动建 .venv, 可直接运行或供 systemd 调用)
@@ -117,7 +117,7 @@ bash tools/start_asr_api.sh 9881
 > 门面依赖兄弟仓库的共享库 [chii-facade-common](https://github.com/Anime2Real/Chobits-Chii-ServerDeploy/tree/cloud/tools/chii-facade-common)（鉴权/限流/env 解析等两门面公共逻辑的唯一真相源）。`start_asr_api.sh` 首次建 venv 时自动从同级目录 `../Chobits-Chii-ServerDeploy/tools/chii-facade-common` 以 editable 方式安装（兼容旧目录名）；单仓库 clone 需先同级 clone ServerDeploy 仓库**并检出 `cloud` 分支**——其 `main` 仅作分支索引、无 `tools/` 目录（`git clone -b cloud git@github.com:Anime2Real/Chobits-Chii-ServerDeploy.git ../Chobits-Chii-ServerDeploy`），或手动 `pip install -e ../Chobits-Chii-ServerDeploy/tools/chii-facade-common`。启动脚本已带前置检查：共享库缺失时打印上述指引并非零退出。改动共享库后须重启门面生效。
 
 调用（在服务器本机验证用 `http://127.0.0.1:9881/v1`；公网由 Caddy 反代终结 TLS——
-客户端经 443 由垫片转发到门面，见 [docs/deployment.md](docs/deployment.md)，`GET /v1/models` 固定返回 `chii-asr`）：
+客户端经 443 由 Caddy 反代到门面，见 [docs/deployment.md](docs/deployment.md)，`GET /v1/models` 固定返回 `chii-asr`）：
 
 ```bash
 # 批量转写 (OpenAI 兼容协议)

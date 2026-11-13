@@ -25,7 +25,7 @@
   ],
   "$defs": {
     "llm_http_error_code": {
-      "title": "LLM HTTP 错误体 code（Chobits-Chii-LLM 垫片，定义见 tools/provision/errors.py）",
+      "title": "LLM HTTP 错误体 code（Chobits-Chii-LLM 门面，定义见 tools/provision/errors.py）",
       "description": "错误 JSON 顶层 \"code\" 字段。OpenAI 风格 chat 错误体为 {\"error\": {...}, \"code\"}；chobits 风格业务错误体为 {\"ok\": false, \"error\": ..., \"code\"}。既有 error/message 字段与文案一律不动（纯增量加键）。",
       "type": "string",
       "enum": [

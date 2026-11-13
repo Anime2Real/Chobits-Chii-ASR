@@ -25,7 +25,7 @@
 | [`qwen3-asr-0.6b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-0.6b) | Qwen3-ASR-0.6B（52 语） | ✅（vLLM，RTF 0.02） | ❌（shim 未落地） | T4 实测通过（2026-10-09） | 纯批量、极致吞吐、多语覆盖 |
 | [`qwen3-asr-1.7b`](https://github.com/Anime2Real/Chobits-Chii-ASR/tree/qwen3-asr-1.7b) | Qwen3-ASR-1.7B（52 语，开源 SOTA 档） | ✅（vLLM，RTF 0.09） | ❌（同上） | T4 实测通过（2026-10-09） | 纯批量、准确率优先 |
 
-三个部署分支的门面代码（`tools/`）与测试（`tests/`）完全一致，差异只在 `docker/`（引擎镜像）与 `deploy/`（env 模板）：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与 OpenAI 兼容协议垫片，与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）同一约定。切换方案 = 整分支切换 + 环境变量对齐，客户端零改动。
+三个部署分支的门面代码（`tools/`）与测试（`tests/`）完全一致，差异只在 `docker/`（引擎镜像）与 `deploy/`（env 模板）：推理引擎跑在 Docker 里，宿主机 Python 门面负责鉴权（`Authorization: Bearer`）、每 IP 限流与 OpenAI 兼容协议门面，与家族其他服务（[LLM](https://github.com/Anime2Real/Chobits-Chii-LLM) / [TTS](https://github.com/Anime2Real/Chobits-Chii-TTS)）同一约定。切换方案 = 整分支切换 + 环境变量对齐，客户端零改动。
 
 对客户端的协议契约（WS 会话语义、X-6 错误码、ASR 票据格式）的机器可读单一事实源见 [`docs/contracts/`](docs/contracts/)；各方案的硬件适配经验（T4 已实测、V100 预留）统一收录在 [docs/hardware-adaptation.md](docs/hardware-adaptation.md)（三分支同款，main 为原件）。
 

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""小叽 ASR 服务门面: API Key 鉴权 + 每 IP 限流 + OpenAI 兼容垫片 + 统一流式 WS 网关。
+"""小叽 ASR 服务门面: API Key 鉴权 + 每 IP 限流 + OpenAI 兼容门面 + 统一流式 WS 网关。
 
 架构与家族其他服务一致: 推理引擎跑在 Docker 容器内 (见 docker/), 本脚本跑在宿主机,
 对客户端屏蔽引擎细节。后端经 CHII_ASR_BACKEND 切换 (funasr | qwen3),
@@ -27,7 +27,7 @@ tools/backend_funasr.py / tools/backend_qwen3.py 吸收。
 
 配置走环境变量 (生产环境经 /etc/chobits-chii-asr.env 注入, env 模板见部署分支 deploy/):
     CHII_ASR_API_KEY          客户端 Bearer 鉴权 key (必填, 未设置拒绝启动)
-    CHII_ASR_TICKET_SECRET    流式 WS 票据签名密钥 (与签发方 Chobits-Chii-LLM 垫片共享的独立
+    CHII_ASR_TICKET_SECRET    流式 WS 票据签名密钥 (与签发方 Chobits-Chii-LLM 门面共享的独立
                               密钥, 非 API_KEY 派生; 未设置时票据一律验签失败, 仅 key 直连可用)
     CHII_ASR_BACKEND          引擎后端: funasr (默认) | qwen3
     CHII_ASR_ENGINE_HTTP_URL  引擎 HTTP 地址, 默认 http://127.0.0.1:9001
@@ -96,7 +96,7 @@ _auth = ApiKeyAuth(API_KEY)
 _key_ok = _auth.key_ok
 
 # 与签发服务 (newapi_provision.py) 共享的 WS 票据签名密钥：
-# app 先经垫片 /v1/asr/ticket 换短时票据，再用票据直连 /v1/realtime，
+# app 先经门面 /v1/asr/ticket 换短时票据，再用票据直连 /v1/realtime，
 # 门面本地验签即可，无需回调 New API
 TICKET_SECRET = _getenv("TICKET_SECRET")
 BIND = _getenv("BIND", "127.0.0.1")  # 默认只绑本机（生产由 Caddy 反代）；显式改绑公网见下方 TLS 守卫
@@ -352,7 +352,7 @@ def _sanitize_filename(name: str) -> str:
 
 @app.post("/v1/audio/transcriptions")
 async def transcriptions(request: Request):
-    """OpenAI 批量转写垫片: 透传 multipart 表单, 仅把 model 字段改写为引擎注册名。
+    """OpenAI 批量转写门面: 透传 multipart 表单, 仅把 model 字段改写为引擎注册名。
 
     引擎只认自己注册的模型名 (见 ENGINE_MODEL), 对外统一暴露 chii-asr;
     文件与表单字段白名单 (language/prompt 等) 转发, 响应原样回传。"""

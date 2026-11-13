@@ -2,7 +2,7 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://github.com/Anime2Real/Chobits-Chii-ASR/blob/main/docs/contracts/asr-ticket.schema.json",
   "title": "Chobits ASR 流式 WS 票据",
-  "description": "ASR 流式 WS 一次性票据：LLM 垫片签发（Chobits-Chii-LLM tools/provision/state.py 的 issueAsrTicket），ASR 门面验签（tools/server.py 的 _ticket_verify / _ticket_mark_used，验签前置、核销在 ws.accept() 之后）。新旧两版并存：新门面同时接受 3 段与 4 段票据；上线顺序先 ASR 门面后 LLM 垫片，回滚反之。双方通过独立共享密钥（CHII_ASR_TICKET_SECRET，非 CHII_ASR_API_KEY 派生）验签，改密钥需两侧同改。契约版本见同目录 VERSION 文件。",
+  "description": "ASR 流式 WS 一次性票据：LLM 门面签发（Chobits-Chii-LLM tools/provision/state.py 的 issueAsrTicket），ASR 门面验签（tools/server.py 的 _ticket_verify / _ticket_mark_used，验签前置、核销在 ws.accept() 之后）。新旧两版并存：新门面同时接受 3 段与 4 段票据；上线顺序先 ASR 门面后 LLM 门面，回滚反之。双方通过独立共享密钥（CHII_ASR_TICKET_SECRET，非 CHII_ASR_API_KEY 派生）验签，改密钥需两侧同改。契约版本见同目录 VERSION 文件。",
   "type": "string",
   "oneOf": [
     { "$ref": "#/$defs/ticket_v1" },
@@ -38,9 +38,9 @@
     "sig": "HMAC-SHA256 签名（hexdigest 前 32 位，小写 hex）"
   },
   "x-compat-matrix": {
-    "旧门面 + 旧垫片（签 3 段）": "✅",
-    "旧门面 + 新垫片（签 4 段）": "❌ 拒票（段数≠3）",
-    "新门面 + 旧垫片（签 3 段）": "✅（按 IP 计数）",
-    "新门面 + 新垫片（签 4 段）": "✅（按身份计数）"
+    "旧门面 + 旧门面（签 3 段）": "✅",
+    "旧门面 + 新门面（签 4 段）": "❌ 拒票（段数≠3）",
+    "新门面 + 旧门面（签 3 段）": "✅（按 IP 计数）",
+    "新门面 + 新门面（签 4 段）": "✅（按身份计数）"
   }
 }

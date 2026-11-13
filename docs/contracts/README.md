@@ -1,6 +1,6 @@
 # docs/contracts —— 跨服务契约（机器可读单一事实源）
 
-本目录是 Chobits-Chii 家族 **LLM 垫片 ↔ ASR 门面** 跨服务契约的机器可读定义，
+本目录是 Chobits-Chii 家族 **LLM 门面 ↔ ASR 门面** 跨服务契约的机器可读定义，
 为两服务契约的**单一事实源（single source of truth）**（2026-10-06 起）。
 契约的人类可读说明分散在：
 

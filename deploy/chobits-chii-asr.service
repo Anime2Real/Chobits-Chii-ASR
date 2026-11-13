@@ -1,5 +1,5 @@
 [Unit]
-Description=Chobits-Chii ASR 门面 (API Key 鉴权 + 限流 + OpenAI 垫片 + 流式 WS 网关)
+Description=Chobits-Chii ASR 门面 (API Key 鉴权 + 限流 + OpenAI 兼容门面 + 流式 WS 网关)
 After=network-online.target docker.service
 Wants=network-online.target
 

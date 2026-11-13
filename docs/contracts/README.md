@@ -4,8 +4,11 @@
 为两服务契约的**单一事实源（single source of truth）**（2026-10-06 起）。
 契约的人类可读说明分散在：
 
-- `Chobits-Chii-LLM/README.md`「服务接口」节（X-6 错误码表）
-- `Chobits-Chii-ASR/README.md`「为切换 Qwen3-ASR 做的准备」节（ASR WS 错误帧表）
+- `Chobits-Chii-LLM` 各路线分支（`prompt/*` / `vllm/*`）`README.md`「服务接口」节
+  （X-6 错误码表）——LLM 的 `main` 同样只是分支索引页
+- `Chobits-Chii-ASR` 各模型分支（`fun-asr-nano-0.8b` / `qwen3-asr-1.7b`）`README.md`
+  「与 Qwen3-ASR 方案的切换」节内的错误码表（ASR WS 错误帧表）——
+  `main` 的 README 已精简为导航页，不再承载协议细节
 - `Chobits-Chii-ServerDeploy` `origin/cloud` 分支 `docs/compatibility.md`
   （最完整的契约文档，含兼容矩阵与上线顺序约束）
 
@@ -43,4 +46,7 @@
 - **MINOR**：向后兼容的新增（新增错误码取值、新增可选字段）；
 - **PATCH**：纯文档/描述修订，不改变协议语义。
 
-当前版本：**1.0.0**（2026-10-06 首次落地，内容为既有线上契约的固化，无协议变更）。
+当前版本：**1.0.1**（2026-10-20，PATCH：修正 `asr-ticket.schema.json` 的 sig 字段描述
+为实际口径——HMAC-SHA256 `hexdigest()` 前 32 位小写 hex（原误写 base64url），
+无协议语义变更）。
+上一版本：**1.0.0**（2026-10-06 首次落地，内容为既有线上契约的固化，无协议变更）。

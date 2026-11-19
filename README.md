@@ -6,7 +6,8 @@
 		<a href="https://madewithlove.org.in"><img alt="Made with Love" src="https://img.shields.io/badge/Made%20with-Love-ff69b4.svg"></a>
 		<a href="https://github.com/Anime2Real/Chobits-Chii-ASR"><img alt="GitHub" src="https://img.shields.io/badge/GitHub-Chobits--Chii--ASR-181717?logo=github"></a>
 		<a href="https://huggingface.co/datasets/chenxin199305/Chobits-Chii-Voice"><img alt="Dataset: Chobits-Chii-Voice" src="https://img.shields.io/badge/%F0%9F%A4%97%20Dataset-Chobits--Chii--Voice-yellow"></a>
-		<a href="https://creativecommons.org/licenses/by-nc-sa/4.0/"><img alt="License: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/License-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
+		<a href="LICENSE"><img alt="License: PolyForm NC 1.0.0" src="https://img.shields.io/badge/License-PolyForm%20NC%201.0.0-orange.svg"></a>
+		<a href="LICENSE-DATA"><img alt="Data: CC BY-NC-SA 4.0" src="https://img.shields.io/badge/Data-CC%20BY--NC--SA%204.0-lightgrey.svg"></a>
 		<img alt="Language: Japanese" src="https://img.shields.io/badge/Language-Japanese-green.svg">
 	</p>
 </div>
@@ -38,9 +39,13 @@
 
 ## 📄 许可协议
 
-本项目的派生内容遵循数据集的 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans)（署名-非商业性使用-相同方式共享）协议。
+本仓库采用「严格非商用 + 双授权」，**不是 OSI 开源**。
 
-上游模型 Fun-ASR-Nano-2512 与 Qwen3-ASR 均为 Apache-2.0，遵循其各自许可。
+- **代码**：PolyForm Noncommercial 1.0.0，见 [LICENSE](./LICENSE)。
+- **数据 / 模型权重**：CC BY-NC-SA 4.0，见 [LICENSE-DATA](./LICENSE-DATA) 与 [MODEL-TERMS.md](./MODEL-TERMS.md)。
+- **商业使用**：公开许可不允许商业使用；如需商用，请通过 [COMMERCIAL.md](./COMMERCIAL.md) 联系。
+- **历史版本**：此前版本的授权继续有效，见 [LICENSE-HISTORY.md](./LICENSE-HISTORY.md)。
+- **第三方素材 / 角色 IP**：不适用上述许可，见 [ASSETS.md](./ASSETS.md) / [NOTICE](./NOTICE)。
 
 ## ⚠️ 免责声明
 

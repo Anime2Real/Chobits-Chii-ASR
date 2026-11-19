@@ -164,13 +164,13 @@ python3 tools/eval_chobits.py --voice /path/to/Chobits-Chii-Voice/dataset --tag 
 
 ## 📄 许可协议
 
-本项目的派生内容遵循数据集的 [CC BY-NC-SA 4.0](https://creativecommons.org/licenses/by-nc-sa/4.0/deed.zh-hans)（署名-非商业性使用-相同方式共享）协议：
+本仓库采用「严格非商用 + 双授权」，**不是 OSI 开源**。
 
-- **署名 (BY)**：使用时须注明来源。
-- **非商业性使用 (NC)**：不得用于商业目的。
-- **相同方式共享 (SA)**：衍生作品须以相同协议发布。
-
-上游模型 Fun-ASR-Nano-2512 与 Qwen3-ASR 均为 Apache-2.0，遵循其各自许可。
+- **代码**：PolyForm Noncommercial 1.0.0，见 [LICENSE](./LICENSE)。
+- **数据 / 模型权重**：CC BY-NC-SA 4.0，见 [LICENSE-DATA](./LICENSE-DATA) 与 [MODEL-TERMS.md](./MODEL-TERMS.md)。
+- **商业使用**：公开许可不允许商业使用；如需商用，请通过 [COMMERCIAL.md](./COMMERCIAL.md) 联系。
+- **历史版本**：此前版本的授权继续有效，见 [LICENSE-HISTORY.md](./LICENSE-HISTORY.md)。
+- **第三方素材 / 角色 IP**：不适用上述许可，见 [ASSETS.md](./ASSETS.md) / [NOTICE](./NOTICE)。
 
 ## ⚠️ 免责声明
 
